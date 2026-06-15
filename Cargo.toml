@@ -7,9 +7,6 @@ members = [
     "provium-host",
     "provium-coverage",
 ]
-exclude = [
-    "spikes",
-]
 
 [workspace.package]
 edition = "2021"
