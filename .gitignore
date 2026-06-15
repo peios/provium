@@ -1,0 +1,17 @@
+# Rust build artifacts (workspace + nested spike crates)
+target/
+
+# Generated initrd / overlay images
+/dist/
+
+# Spike experiment runtime artifacts (snapshots, work dirs, logs)
+spikes/ch-snapshot/run/work*/
+spikes/ch-snapshot/run/*.log
+
+# Vendored third-party binaries (cloud-hypervisor / ch-remote, re-downloadable)
+spikes/ch-snapshot/bin/
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+*~

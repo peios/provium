@@ -1,0 +1,16 @@
+[package]
+name = "provium-qmp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Synchronous Rust client for QEMU's Machine Protocol (QMP) over a unix socket. Host-only — used by the provium scheduler to drive QEMU snapshot/restore, pause/resume, and migration."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10"

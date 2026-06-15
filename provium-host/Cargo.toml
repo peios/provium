@@ -1,0 +1,121 @@
+[package]
+name = "provium-host"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Host-side provium core. Scheduler, VM resource model, agent client, profile loading. Pre-Lua-bindings slice."
+
+[lib]
+name = "provium_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "provium"
+path = "src/bin/provium.rs"
+required-features = ["lua", "local-agent"]
+
+[features]
+default = []
+# Enable [`vmm::local_agent::LocalAgentVmm`] — a slice-2 reference VMM
+# that "boots" by spawning a `provium-agent` connection handler on a
+# `UnixStream::pair()` instead of a real QEMU process. Useful for the
+# Lua test driver during slice 2 (no KVM required) and for pure-host
+# unit testing of scheduler/runner logic. Off in production builds —
+# real VMs come from `vmm::qemu::QemuVmm` once slice 3 lands.
+local-agent = ["dep:provium-agent"]
+
+# `lua` enables the mlua bindings + test framework. Behind a feature
+# so consumers that just want the agent client / event types can avoid
+# pulling in mlua's Lua runtime.
+lua = ["dep:mlua"]
+
+[dependencies]
+provium-protocol = { path = "../provium-protocol" }
+provium-qmp = { path = "../provium-qmp" }
+
+serde = { workspace = true }
+rmp-serde = { workspace = true }
+thiserror = { workspace = true }
+toml = "1.1"
+
+# vsock for production connections to the in-VM agent. Tests bypass it
+# via UnixStream::pair so this dep doesn't make the test surface
+# Linux-only.
+vsock = "0.5"
+
+# Raw kill(2) for the SIGKILL backstop in QemuBackend's shutdown
+# path. std::process::Child::kill issues SIGKILL too, but on a
+# `&mut Child`; the backstop runs from a `&Child` after
+# `try_wait` so we go through libc directly.
+libc = "0.2"
+
+# Fixture cache uses SHA-256 to derive content-addressable keys.
+sha2 = "0.10"
+
+# Slice 14.5: snapshot compression helpers in perf module.
+zstd = "0.13"
+
+# Used in production for `reset_between_tests` baseline snapshot
+# scratch dirs; was previously dev-only.
+tempfile = "3.10"
+
+# Optional — gated by features above.
+provium-agent = { path = "../provium-agent", optional = true }
+mlua = { version = "0.10", features = ["lua54", "vendored", "send", "serialize"], optional = true }
+
+# Binary deps. Needed by `src/bin/provium.rs` only — feature-gating
+# is applied through the `[[bin]]` `required-features = ["lua", …]`.
+clap = { version = "4.5", features = ["derive"] }
+walkdir = "2.5"
+serde_json = { workspace = true }
+rustyline = "14.0"
+
+# Live progress bar for `provium tests/` on a TTY. Auto-degrades to
+# a no-op draw target when stderr is not a terminal.
+indicatif = "0.17"
+
+[dev-dependencies]
+# All cfg-gated dev work assumes both features are on.
+provium-agent = { path = "../provium-agent" }
+
+[[test]]
+name = "agent_client"
+required-features = []
+
+[[test]]
+name = "lua_e2e"
+required-features = ["lua", "local-agent"]
+
+[[test]]
+name = "dispatcher"
+required-features = ["lua", "local-agent"]
+
+[[test]]
+name = "cli"
+required-features = ["lua", "local-agent"]
+
+[[test]]
+name = "fixtures"
+required-features = ["lua", "local-agent"]
+
+[[test]]
+name = "process"
+required-features = ["lua", "local-agent"]
+
+[[test]]
+name = "clock"
+required-features = ["lua", "local-agent"]
+
+[[test]]
+name = "bridges"
+required-features = ["lua", "local-agent"]
+
+[[test]]
+name = "console_syscall"
+required-features = ["lua", "local-agent"]
+
+[[test]]
+name = "workers"
+required-features = ["lua", "local-agent"]

@@ -1,0 +1,7 @@
+{
+  "runtime.version": "Lua 5.4",
+  "workspace.library": [".provium-meta"],
+  "workspace.checkThirdParty": false,
+  "diagnostics.disable": ["lowercase-global"],
+  "diagnostics.globals": ["test", "todo", "wait_until", "provium", "json"]
+}
