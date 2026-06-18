@@ -63,22 +63,38 @@ pub fn run_if_init() {
 }
 
 /// Whether a real downstream init exists at `/init` that we should
-/// chain to. False when `/init` is absent, or when it canonicalises to
-/// the agent binary itself (the pre-overlay layout placed the agent at
-/// `/init` — chaining to ourselves would be an exec loop).
+/// chain to. False when `/init` is absent, or when *we* are `/init` (the
+/// standalone agent-initrd layout — chaining to ourselves would be an
+/// exec loop).
+///
+/// The discriminator is `argv[0]`, the path the kernel launched us from,
+/// **not** `current_exe()`. This runs before [`perform_init_mounts`], so
+/// `/proc` is not yet mounted and `current_exe()` (which reads
+/// `/proc/self/exe`) fails — which previously made this misfire to
+/// `true`, sending the standalone agent into a fork/exec loop:
+/// `chain_to_user_init` forks, the parent re-`execv`s the same `/init`
+/// binary, re-enters here, forks again… until PID 1 finally hits the
+/// `bind`-in-use `exit(1)` and the kernel panics ("Attempted to kill
+/// init"). `argv[0]` is `/proc`-independent: the kernel sets it to
+/// `/init` when we are the initrd's init (standalone), or to the overlay
+/// path (`/sbin/provium-agent`) when provium injected us via `rdinit=`
+/// alongside a real downstream `/init`.
 fn user_init_present() -> bool {
     let init_path = Path::new("/init");
     if !init_path.exists() {
         return false;
     }
-    if let (Ok(self_path), Ok(init_canon)) =
-        (std::env::current_exe(), init_path.canonicalize())
-    {
-        if self_path == init_canon {
-            return false;
-        }
+    match std::env::args_os().next() {
+        // We were launched as `/init` itself: standalone, nothing to
+        // chain to.
+        Some(argv0) if Path::new(&argv0) == init_path => false,
+        // Launched from a different path (the injected overlay): a real
+        // user `/init` exists for us to hand off to.
+        Some(_) => true,
+        // No argv[0] at all: assume standalone rather than risk the
+        // fork/exec loop.
+        None => false,
     }
-    true
 }
 
 /// Fork and hand off to the user's `/init`: the child returns from this
