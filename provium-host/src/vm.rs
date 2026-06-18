@@ -1143,20 +1143,23 @@ impl Vm {
 
     /// Issue a raw Layer-0 syscall through the agent.
     pub fn syscall(&self, nr: i64, args: [i64; 6]) -> Result<SyscallResult, VmError> {
-        self.syscall_with_bufs(nr, args, Vec::new(), Vec::new())
+        self.syscall_with_bufs(nr, args, Vec::new(), Vec::new(), Vec::new())
     }
 
     /// Layer-0 syscall with byte-buffer marshalling. `bufs` carries
     /// in-out byte buffers; `ptrs[i]` is the `args` index whose
     /// value the agent should overwrite with `bufs[i]`'s address
-    /// before the syscall. Result includes `out_bufs` paired by
-    /// index. Per `DESIGN.md` § VM / Layer-0.
+    /// before the syscall. `nested` splices one buffer's address into
+    /// another (for struct args that point at further buffers — the
+    /// QUERY ioctl, `kacs_access_check`). Result includes `out_bufs`
+    /// paired by index. Per `DESIGN.md` § VM / Layer-0.
     pub fn syscall_with_bufs(
         &self,
         nr: i64,
         args: [i64; 6],
         bufs: Vec<Vec<u8>>,
         ptrs: Vec<u8>,
+        nested: Vec<provium_protocol::wire::NestedPtr>,
     ) -> Result<SyscallResult, VmError> {
         let r = self.with_client("syscall", |client| {
             client
@@ -1165,6 +1168,7 @@ impl Vm {
                     args,
                     bufs,
                     ptrs,
+                    nested,
                 })
                 .map_err(VmError::Client)
         })?;
@@ -2026,21 +2030,24 @@ impl Worker {
         for (slot, value) in padded.iter_mut().zip(args.into_iter().take(6)) {
             *slot = value;
         }
-        self.syscall_with_bufs(nr, padded, Vec::new(), Vec::new())
+        self.syscall_with_bufs(nr, padded, Vec::new(), Vec::new(), Vec::new())
     }
 
     /// Same as [`Worker::syscall`] but with the bufs/ptrs splice
     /// extension — the agent writes each `bufs[i]` into a scratch
     /// region and substitutes the address into `args[ptrs[i]]`
     /// before issuing the syscall, then returns the post-syscall
-    /// buffer contents in `out_bufs`. Mirrors [`Vm::syscall_with_bufs`]
-    /// so worker-scoped tests have full parity with VM-scoped ones.
+    /// buffer contents in `out_bufs`. `nested` splices one buffer
+    /// into another (struct args pointing at further buffers).
+    /// Mirrors [`Vm::syscall_with_bufs`] so worker-scoped tests have
+    /// full parity with VM-scoped ones.
     pub fn syscall_with_bufs(
         &self,
         nr: i64,
         args: [i64; 6],
         bufs: Vec<Vec<u8>>,
         ptrs: Vec<u8>,
+        nested: Vec<provium_protocol::wire::NestedPtr>,
     ) -> Result<crate::vm::SyscallResult, VmError> {
         let r = self.vm.with_client("worker_syscall", |client| {
             client
@@ -2051,6 +2058,7 @@ impl Worker {
                         args,
                         bufs: bufs.clone(),
                         ptrs: ptrs.clone(),
+                        nested: nested.clone(),
                     },
                 })
                 .map_err(VmError::Client)

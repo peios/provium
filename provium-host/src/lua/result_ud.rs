@@ -976,6 +976,7 @@ impl UserData for WorkerUd {
             let mut filled = [0i64; 6];
             let mut bufs: Vec<Vec<u8>> = Vec::new();
             let mut ptrs: Vec<u8> = Vec::new();
+            let mut nested: Vec<provium_protocol::wire::NestedPtr> = Vec::new();
             let second = args.get(1).cloned();
             if let Some(Value::Table(t)) = second {
                 if let Ok(arg_tbl) = t.get::<mlua::Table>("args") {
@@ -997,6 +998,21 @@ impl UserData for WorkerUd {
                         ptrs.push(pair?);
                     }
                 }
+                // Mirrors vm:syscall — splice bufs[child] into bufs[parent]
+                // at a byte offset (1-based buf indices).
+                if let Ok(nested_tbl) = t.get::<mlua::Table>("nested") {
+                    for entry in nested_tbl.sequence_values::<mlua::Table>() {
+                        let e = entry?;
+                        let parent: i64 = e.get("parent")?;
+                        let child: i64 = e.get("child")?;
+                        let offset: u32 = e.get("offset")?;
+                        nested.push(provium_protocol::wire::NestedPtr {
+                            parent: (parent - 1).max(0) as u8,
+                            child: (child - 1).max(0) as u8,
+                            offset,
+                        });
+                    }
+                }
             } else {
                 let mut all: Vec<i64> = Vec::new();
                 for v in args.iter().skip(1) {
@@ -1015,7 +1031,7 @@ impl UserData for WorkerUd {
             }
             let result = this
                 .worker
-                .syscall_with_bufs(nr, filled, bufs, ptrs)
+                .syscall_with_bufs(nr, filled, bufs, ptrs, nested)
                 .map_err(mlua::Error::external)?;
             let table = lua.create_table()?;
             table.set("ret", result.ret)?;

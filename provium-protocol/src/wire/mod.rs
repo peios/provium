@@ -47,7 +47,7 @@ pub use ops::{
     CloseResult, DirEntry, EntryType, ExecArgs, ExecOk, ExecResult, ExitStatus, FdStreamArgs,
     FdStreamResult, FileMetadata, GetTimeArgs, GetTimeResult, IoctlArgs, IoctlOk, IoctlResult,
     GetPidArgs, GetPidResult, KillArgs, KillResult, ListdirArgs, ListdirResult, MkdirArgs,
-    MkdirResult, OpResult,
+    MkdirResult, NestedPtr, OpResult,
     OpenFileArgs, OpenFileResult, OpenMode, ProcStatusArgs, ProcStatusResult, ProcStdinCloseArgs,
     ProcStdinCloseResult, ProcStdinWriteArgs, ProcStdinWriteOk, ProcStdinWriteResult,
     ProcStreamArgs, ProcStreamChannel, ProcStreamResult, ProcessLiveStatus, ReadArgs, ReadFileArgs,

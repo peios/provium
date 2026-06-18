@@ -604,6 +604,7 @@ impl UserData for VmUd {
             let mut filled = [0i64; 6];
             let mut bufs: Vec<Vec<u8>> = Vec::new();
             let mut ptrs: Vec<u8> = Vec::new();
+            let mut nested: Vec<provium_protocol::wire::NestedPtr> = Vec::new();
             let second = args.get(1).cloned();
             if let Some(Value::Table(t)) = second {
                 if let Ok(arg_tbl) = t.get::<mlua::Table>("args") {
@@ -625,6 +626,22 @@ impl UserData for VmUd {
                         ptrs.push(pair?);
                     }
                 }
+                // `nested = {{parent=N, child=M, offset=K}, …}` splices
+                // bufs[M]'s address into bufs[N] at byte K. parent/child
+                // are 1-based indices into `bufs` (Lua array positions).
+                if let Ok(nested_tbl) = t.get::<mlua::Table>("nested") {
+                    for entry in nested_tbl.sequence_values::<mlua::Table>() {
+                        let e = entry?;
+                        let parent: i64 = e.get("parent")?;
+                        let child: i64 = e.get("child")?;
+                        let offset: u32 = e.get("offset")?;
+                        nested.push(provium_protocol::wire::NestedPtr {
+                            parent: (parent - 1).max(0) as u8,
+                            child: (child - 1).max(0) as u8,
+                            offset,
+                        });
+                    }
+                }
             } else {
                 // Plain-int form: collect remaining integer args.
                 let mut all: Vec<i64> = Vec::new();
@@ -644,7 +661,7 @@ impl UserData for VmUd {
             }
             let r = this
                 .vm
-                .syscall_with_bufs(nr, filled, bufs, ptrs)
+                .syscall_with_bufs(nr, filled, bufs, ptrs, nested)
                 .map_err(mlua::Error::external)?;
             let table = lua.create_table()?;
             table.set("ret", r.ret)?;
@@ -1009,6 +1026,7 @@ impl UserData for BatchUd {
                     args: padded,
                     bufs: Vec::new(),
                     ptrs: Vec::new(),
+                    nested: Vec::new(),
                 },
             ));
             Ok(())
