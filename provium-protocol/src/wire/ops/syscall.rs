@@ -10,8 +10,25 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Arguments for a 6-arg integer-only syscall.
+/// One nested-pointer splice: write `bufs[child]`'s in-agent address
+/// into `bufs[parent]` at byte `offset` (an 8-byte native-endian
+/// pointer), applied *before* the arg-slot `ptrs`. This lets a buffer
+/// carry a pointer to another buffer — e.g. a struct argument whose
+/// field must point at a caller-supplied output buffer (the QUERY
+/// ioctl, `kacs_access_check`, etc.). `parent`/`child` are 0-based
+/// indices into [`SyscallArgs::bufs`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NestedPtr {
+    /// 0-based index into `bufs` of the buffer whose bytes are patched.
+    pub parent: u8,
+    /// 0-based index into `bufs` of the buffer whose address is written.
+    pub child: u8,
+    /// Byte offset within `bufs[parent]` to write the 8-byte pointer.
+    pub offset: u32,
+}
+
+/// Arguments for a 6-arg syscall, optionally with pointer buffers.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyscallArgs {
     /// Syscall number (Linux ABI on the v1 Peios port).
     pub nr: i64,
@@ -28,6 +45,10 @@ pub struct SyscallArgs {
     /// `bufs[i]`'s address.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ptrs: Vec<u8>,
+    /// Nested-pointer splices applied *before* `ptrs` — see
+    /// [`NestedPtr`]. Lets one buffer point at another.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nested: Vec<NestedPtr>,
 }
 
 /// Outcome of a syscall. Mirrors POSIX: `ret >= 0` means success;
@@ -58,6 +79,21 @@ mod tests {
             args: [1, 2, 3, 0, 0, 0],
             bufs: Vec::new(),
             ptrs: Vec::new(),
+            nested: Vec::new(),
+        };
+        let bytes = rmp_serde::to_vec_named(&a).unwrap();
+        let back: SyscallArgs = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(a, back);
+    }
+
+    #[test]
+    fn args_round_trip_with_nested() {
+        let a = SyscallArgs {
+            nr: 16,
+            args: [7, 0xC0104B00, 0, 0, 0, 0],
+            bufs: vec![vec![0u8; 16], vec![0u8; 64]],
+            ptrs: vec![2],
+            nested: vec![NestedPtr { parent: 0, child: 1, offset: 8 }],
         };
         let bytes = rmp_serde::to_vec_named(&a).unwrap();
         let back: SyscallArgs = rmp_serde::from_slice(&bytes).unwrap();
