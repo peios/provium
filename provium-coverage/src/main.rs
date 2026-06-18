@@ -1,8 +1,8 @@
 //! `provium-coverage` — sibling consumer of provium's observability
 //! event stream. Reads the msgpack-framed [`provium_protocol::events`]
 //! stream produced by `provium --save-events <path>`, groups
-//! `test_passed` / `test_failed` by a metadata key (default `spec`),
-//! and emits a coverage report.
+//! `test_passed` / `test_failed` / `test_skipped` by a metadata key
+//! (default `spec`), and emits a coverage report.
 //!
 //! Slice 12 surface (kept deliberately minimal):
 //!
@@ -13,9 +13,21 @@
 //!     --json         JSON output instead of plain text
 //! ```
 //!
-//! Out of scope for v1 per `DESIGN.md` § Spec citation grouping:
-//! hierarchical rollups (`§4.2.1.1` ⇒ `§4.2.1`). Exact-string
-//! matching is what slice 12 ships.
+//! Grouping value handling:
+//!
+//! * A **string** `meta[KEY]` is one bucket.
+//! * An **array of strings** explodes into one bucket per element — a
+//!   test tagged `rows = {"A", "B"}` counts toward both `A` and `B`.
+//!   This is what lets a single test cover several matrix rows while
+//!   still showing per-row coverage.
+//! * Any other shape (missing, int, map, …) is `<unset>`.
+//!
+//! Skipped tests are counted (as `skipped`, distinct from passed) so a
+//! row covered only by a tracked-but-not-yet-runnable test is visible as
+//! covered-but-skipped rather than silently absent.
+//!
+//! Out of scope per `DESIGN.md` § Spec citation grouping: hierarchical
+//! rollups (`§4.2.1.1` ⇒ `§4.2.1`). Exact-string matching is what ships.
 
 use std::collections::BTreeMap;
 use std::io::{self, BufReader, Read};
@@ -24,7 +36,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use provium_protocol::events::{Event, EventFrame, MetaValue};
+use provium_protocol::events::{Event, EventFrame, MetaMap, MetaValue};
 use provium_protocol::frame::{read_frame, DEFAULT_MAX_FRAME_BYTES};
 
 #[derive(Debug, Parser)]
@@ -74,7 +86,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 /// Aggregated coverage report.
 #[derive(Debug, Default)]
 pub struct CoverageReport {
-    /// Tests that had no value for the requested key.
+    /// Tests that had no string value for the requested key.
     pub uncategorised: BucketStats,
     /// Buckets keyed by the metadata value.
     pub buckets: BTreeMap<String, BucketStats>,
@@ -87,12 +99,30 @@ pub struct BucketStats {
     pub passed: u64,
     /// Tests failed.
     pub failed: u64,
+    /// Tests skipped (declarative `meta.skip`, `t:skip()`, or filtered).
+    pub skipped: u64,
 }
 
 impl BucketStats {
     fn total(&self) -> u64 {
-        self.passed + self.failed
+        self.passed + self.failed + self.skipped
     }
+
+    fn record(&mut self, outcome: Outcome) {
+        match outcome {
+            Outcome::Passed => self.passed += 1,
+            Outcome::Failed => self.failed += 1,
+            Outcome::Skipped => self.skipped += 1,
+        }
+    }
+}
+
+/// A single test's outcome, for [`bump`].
+#[derive(Debug, Clone, Copy)]
+enum Outcome {
+    Passed,
+    Failed,
+    Skipped,
 }
 
 impl CoverageReport {
@@ -101,36 +131,34 @@ impl CoverageReport {
         let mut out = String::new();
         out.push_str(&format!("coverage by `{key_name}`:\n"));
         for (k, s) in &self.buckets {
-            out.push_str(&format!(
-                "  {k}: {} tests ({} passed, {} failed)\n",
-                s.total(),
-                s.passed,
-                s.failed
-            ));
+            out.push_str(&format!("  {k}: {}\n", render_counts(s)));
         }
         if self.uncategorised.total() > 0 {
-            out.push_str(&format!(
-                "  <unset>: {} tests ({} passed, {} failed)\n",
-                self.uncategorised.total(),
-                self.uncategorised.passed,
-                self.uncategorised.failed
-            ));
+            out.push_str(&format!("  <unset>: {}\n", render_counts(&self.uncategorised)));
         }
+        let (passed, failed, skipped) = self.totals();
         out.push_str(&format!(
-            "  ---\n  buckets: {}; tests: {} passed, {} failed",
+            "  ---\n  buckets: {}; {passed} passed, {failed} failed, {skipped} skipped",
             self.buckets.len(),
-            self.buckets
-                .values()
-                .map(|s| s.passed)
-                .sum::<u64>()
-                + self.uncategorised.passed,
-            self.buckets
-                .values()
-                .map(|s| s.failed)
-                .sum::<u64>()
-                + self.uncategorised.failed
         ));
         out
+    }
+
+    /// Sum of every bucket plus uncategorised. With array grouping a
+    /// test contributes to each of its buckets, so these are coverage
+    /// entries, not necessarily distinct tests.
+    fn totals(&self) -> (u64, u64, u64) {
+        let mut t = (
+            self.uncategorised.passed,
+            self.uncategorised.failed,
+            self.uncategorised.skipped,
+        );
+        for s in self.buckets.values() {
+            t.0 += s.passed;
+            t.1 += s.failed;
+            t.2 += s.skipped;
+        }
+        t
     }
 
     /// Render as a JSON object. Hand-rolled to avoid pulling
@@ -143,19 +171,31 @@ impl CoverageReport {
                 out.push(',');
             }
             first = false;
-            out.push_str(&format!(
-                "{}:{{\"passed\":{},\"failed\":{}}}",
-                json_string(k),
-                s.passed,
-                s.failed
-            ));
+            out.push_str(&format!("{}:{}", json_string(k), bucket_json(s)));
         }
         out.push_str(&format!(
-            "}},\"uncategorised\":{{\"passed\":{},\"failed\":{}}}}}",
-            self.uncategorised.passed, self.uncategorised.failed
+            "}},\"uncategorised\":{}}}",
+            bucket_json(&self.uncategorised)
         ));
         out
     }
+}
+
+fn render_counts(s: &BucketStats) -> String {
+    format!(
+        "{} tests ({} passed, {} failed, {} skipped)",
+        s.total(),
+        s.passed,
+        s.failed,
+        s.skipped
+    )
+}
+
+fn bucket_json(s: &BucketStats) -> String {
+    format!(
+        "{{\"passed\":{},\"failed\":{},\"skipped\":{}}}",
+        s.passed, s.failed, s.skipped
+    )
 }
 
 fn json_string(s: &str) -> String {
@@ -184,8 +224,9 @@ pub fn aggregate<R: Read>(
     loop {
         match read_frame::<R, EventFrame>(reader, DEFAULT_MAX_FRAME_BYTES) {
             Ok(frame) => match frame.event {
-                Event::TestPassed(t) => bump(&mut report, key, &t.meta, true),
-                Event::TestFailed(t) => bump(&mut report, key, &t.meta, false),
+                Event::TestPassed(t) => bump(&mut report, key, &t.meta, Outcome::Passed),
+                Event::TestFailed(t) => bump(&mut report, key, &t.meta, Outcome::Failed),
+                Event::TestSkipped(t) => bump(&mut report, key, &t.meta, Outcome::Skipped),
                 _ => {}
             },
             Err(provium_protocol::FrameError::Eof) => return Ok(report),
@@ -194,24 +235,31 @@ pub fn aggregate<R: Read>(
     }
 }
 
-fn bump(
-    report: &mut CoverageReport,
-    key: &str,
-    meta: &provium_protocol::events::MetaMap,
-    passed: bool,
-) {
-    let bucket = match meta.get(key) {
-        Some(MetaValue::Str(s)) => Some(s.clone()),
-        _ => None,
-    };
-    let stats = match bucket {
-        Some(name) => report.buckets.entry(name).or_default(),
-        None => &mut report.uncategorised,
-    };
-    if passed {
-        stats.passed += 1;
+/// Resolve the bucket names a test's `meta[key]` maps to. A string is
+/// one bucket; an array of strings is one bucket per element; anything
+/// else is no bucket (→ uncategorised).
+fn bucket_names(meta: &MetaMap, key: &str) -> Vec<String> {
+    match meta.get(key) {
+        Some(MetaValue::Str(s)) => vec![s.clone()],
+        Some(MetaValue::Array(items)) => items
+            .iter()
+            .filter_map(|v| match v {
+                MetaValue::Str(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn bump(report: &mut CoverageReport, key: &str, meta: &MetaMap, outcome: Outcome) {
+    let names = bucket_names(meta, key);
+    if names.is_empty() {
+        report.uncategorised.record(outcome);
     } else {
-        stats.failed += 1;
+        for name in names {
+            report.buckets.entry(name).or_default().record(outcome);
+        }
     }
 }
 
@@ -219,7 +267,7 @@ fn bump(
 mod tests {
     use super::*;
     use provium_protocol::events::{
-        Event, EventFrame, MetaMap, MetaValue, TestFailed, TestPassed,
+        Event, EventFrame, MetaMap, MetaValue, TestFailed, TestPassed, TestSkipped,
     };
     use provium_protocol::frame::write_frame;
     use std::io::Cursor;
@@ -228,6 +276,39 @@ mod tests {
         let mut m = MetaMap::new();
         m.insert("spec".into(), MetaValue::Str(spec.into()));
         m
+    }
+
+    fn meta_with_rows(rows: &[&str]) -> MetaMap {
+        let mut m = MetaMap::new();
+        m.insert(
+            "rows".into(),
+            MetaValue::Array(rows.iter().map(|r| MetaValue::Str((*r).into())).collect()),
+        );
+        m
+    }
+
+    fn passed(name: &str, meta: MetaMap) -> EventFrame {
+        EventFrame {
+            ts: 0,
+            event: Event::TestPassed(TestPassed {
+                path: "f.lua".into(),
+                name: name.into(),
+                duration_ns: 0,
+                meta,
+            }),
+        }
+    }
+
+    fn skipped(name: &str, meta: MetaMap) -> EventFrame {
+        EventFrame {
+            ts: 0,
+            event: Event::TestSkipped(TestSkipped {
+                path: "f.lua".into(),
+                name: name.into(),
+                reason: "needs a fixture".into(),
+                meta,
+            }),
+        }
     }
 
     fn write_events(events: &[EventFrame]) -> Vec<u8> {
@@ -241,24 +322,8 @@ mod tests {
     #[test]
     fn aggregates_passed_failed_per_bucket() {
         let events = vec![
-            EventFrame {
-                ts: 0,
-                event: Event::TestPassed(TestPassed {
-                    path: "f.lua".into(),
-                    name: "a".into(),
-                    duration_ns: 0,
-                    meta: meta_with_spec("X"),
-                }),
-            },
-            EventFrame {
-                ts: 0,
-                event: Event::TestPassed(TestPassed {
-                    path: "f.lua".into(),
-                    name: "b".into(),
-                    duration_ns: 0,
-                    meta: meta_with_spec("X"),
-                }),
-            },
+            passed("a", meta_with_spec("X")),
+            passed("b", meta_with_spec("X")),
             EventFrame {
                 ts: 0,
                 event: Event::TestFailed(TestFailed {
@@ -280,19 +345,46 @@ mod tests {
 
     #[test]
     fn uncategorised_counts_when_key_missing() {
-        let events = vec![EventFrame {
-            ts: 0,
-            event: Event::TestPassed(TestPassed {
-                path: "f.lua".into(),
-                name: "a".into(),
-                duration_ns: 0,
-                meta: MetaMap::new(),
-            }),
-        }];
+        let events = vec![passed("a", MetaMap::new())];
         let bytes = write_events(&events);
         let report = aggregate(&mut Cursor::new(bytes), "spec").unwrap();
         assert_eq!(report.uncategorised.passed, 1);
         assert!(report.buckets.is_empty());
+    }
+
+    #[test]
+    fn skipped_tests_are_counted_per_bucket() {
+        let events = vec![
+            passed("value check", meta_with_spec("PSD §1")),
+            skipped("behaviour check", meta_with_spec("PSD §1")),
+        ];
+        let bytes = write_events(&events);
+        let report = aggregate(&mut Cursor::new(bytes), "spec").unwrap();
+        let b = report.buckets.get("PSD §1").unwrap();
+        assert_eq!(b.passed, 1);
+        assert_eq!(b.skipped, 1);
+        assert_eq!(b.total(), 2);
+    }
+
+    #[test]
+    fn array_meta_explodes_into_each_bucket() {
+        // One test covering three rows passes → all three rows covered.
+        let events = vec![passed("no MAC LSM", meta_with_rows(&["R3", "R4", "R5"]))];
+        let bytes = write_events(&events);
+        let report = aggregate(&mut Cursor::new(bytes), "rows").unwrap();
+        for r in ["R3", "R4", "R5"] {
+            assert_eq!(report.buckets.get(r).unwrap().passed, 1, "{r}");
+        }
+        assert_eq!(report.uncategorised.total(), 0);
+    }
+
+    #[test]
+    fn skipped_array_meta_marks_each_row_skipped() {
+        let events = vec![skipped("unsigned module load", meta_with_rows(&["R10"]))];
+        let bytes = write_events(&events);
+        let report = aggregate(&mut Cursor::new(bytes), "rows").unwrap();
+        assert_eq!(report.buckets.get("R10").unwrap().skipped, 1);
+        assert_eq!(report.buckets.get("R10").unwrap().passed, 0);
     }
 
     #[test]
@@ -315,28 +407,33 @@ mod tests {
     #[test]
     fn json_render_round_trips_through_parsing() {
         let mut report = CoverageReport::default();
-        report
-            .buckets
-            .insert("§4.2".into(), BucketStats { passed: 3, failed: 1 });
+        report.buckets.insert(
+            "§4.2".into(),
+            BucketStats { passed: 3, failed: 1, skipped: 2 },
+        );
         let s = report.to_json();
         assert!(s.contains("§4.2"));
         assert!(s.contains("\"passed\":3"));
         assert!(s.contains("\"failed\":1"));
+        assert!(s.contains("\"skipped\":2"));
     }
 
     #[test]
     fn plain_render_lists_each_bucket() {
         let mut report = CoverageReport::default();
-        report
-            .buckets
-            .insert("PSD-A §1".into(), BucketStats { passed: 5, failed: 0 });
-        report
-            .buckets
-            .insert("PSD-B §2".into(), BucketStats { passed: 0, failed: 2 });
+        report.buckets.insert(
+            "PSD-A §1".into(),
+            BucketStats { passed: 5, failed: 0, skipped: 1 },
+        );
+        report.buckets.insert(
+            "PSD-B §2".into(),
+            BucketStats { passed: 0, failed: 2, skipped: 0 },
+        );
         let s = report.render_plain("spec");
         assert!(s.contains("PSD-A §1"));
         assert!(s.contains("PSD-B §2"));
         assert!(s.contains("5 passed"));
         assert!(s.contains("2 failed"));
+        assert!(s.contains("1 skipped"));
     }
 }
