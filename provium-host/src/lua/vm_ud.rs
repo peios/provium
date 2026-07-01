@@ -590,89 +590,49 @@ impl UserData for VmUd {
         // returned table includes `out_bufs` containing the
         // post-syscall buffer contents.
         methods.add_method("syscall", |lua, this, args: mlua::Variadic<Value>| {
-            let nr_v = args.first().cloned().ok_or_else(|| {
-                mlua::Error::external("vm:syscall(nr, ...): missing nr")
-            })?;
-            let nr = match nr_v {
-                Value::Integer(n) => n,
-                Value::Number(n) => n as i64,
-                _ => return Err(mlua::Error::external(
-                    "vm:syscall: nr must be integer",
-                )),
-            };
-            // Detect table form vs integer form.
-            let mut filled = [0i64; 6];
-            let mut bufs: Vec<Vec<u8>> = Vec::new();
-            let mut ptrs: Vec<u8> = Vec::new();
-            let mut nested: Vec<provium_protocol::wire::NestedPtr> = Vec::new();
-            let second = args.get(1).cloned();
-            if let Some(Value::Table(t)) = second {
-                if let Ok(arg_tbl) = t.get::<mlua::Table>("args") {
-                    for (i, slot) in filled.iter_mut().enumerate() {
-                        let v: Option<i64> = arg_tbl.get((i + 1) as i64).ok();
-                        if let Some(v) = v {
-                            *slot = v;
-                        }
-                    }
-                }
-                if let Ok(buf_tbl) = t.get::<mlua::Table>("bufs") {
-                    for pair in buf_tbl.sequence_values::<mlua::String>() {
-                        let s = pair?;
-                        bufs.push(s.as_bytes().to_vec());
-                    }
-                }
-                if let Ok(ptr_tbl) = t.get::<mlua::Table>("ptrs") {
-                    for pair in ptr_tbl.sequence_values::<u8>() {
-                        ptrs.push(pair?);
-                    }
-                }
-                // `nested = {{parent=N, child=M, offset=K}, …}` splices
-                // bufs[M]'s address into bufs[N] at byte K. parent/child
-                // are 1-based indices into `bufs` (Lua array positions).
-                if let Ok(nested_tbl) = t.get::<mlua::Table>("nested") {
-                    for entry in nested_tbl.sequence_values::<mlua::Table>() {
-                        let e = entry?;
-                        let parent: i64 = e.get("parent")?;
-                        let child: i64 = e.get("child")?;
-                        let offset: u32 = e.get("offset")?;
-                        nested.push(provium_protocol::wire::NestedPtr {
-                            parent: (parent - 1).max(0) as u8,
-                            child: (child - 1).max(0) as u8,
-                            offset,
-                        });
-                    }
-                }
-            } else {
-                // Plain-int form: collect remaining integer args.
-                let mut all: Vec<i64> = Vec::new();
-                for v in args.iter().skip(1) {
-                    let n = match v {
-                        Value::Integer(n) => *n,
-                        Value::Number(n) => *n as i64,
-                        _ => 0,
-                    };
-                    all.push(n);
-                }
-                for (i, slot) in filled.iter_mut().enumerate() {
-                    if let Some(v) = all.get(i) {
-                        *slot = *v;
-                    }
-                }
-            }
+            let (nr, filled, bufs, ptrs, nested) = parse_syscall_args(&args)?;
             let r = this
                 .vm
                 .syscall_with_bufs(nr, filled, bufs, ptrs, nested)
                 .map_err(mlua::Error::external)?;
-            let table = lua.create_table()?;
-            table.set("ret", r.ret)?;
-            table.set("result", r.ret)?;
-            table.set("errno", r.errno)?;
-            let outs = lua.create_table()?;
-            for (i, b) in r.out_bufs.into_iter().enumerate() {
-                outs.set(i + 1, lua.create_string(&b)?)?;
+            syscall_result_table(lua, r.ret, r.errno, r.out_bufs)
+        });
+
+        // vm:syscall_async(nr, ...) — same call forms as vm:syscall, but
+        // sends the syscall and returns a handle *immediately* instead of
+        // waiting. The agent may block inside the syscall; the test drives
+        // other ops meanwhile, then calls `handle:await()` to collect the
+        // result. This is what lets a blocking syscall (e.g. one waiting
+        // on an RSI response from a registry source) stay in flight while
+        // the host serves it on other connections.
+        methods.add_method("syscall_async", |_, this, args: mlua::Variadic<Value>| {
+            let (nr, filled, bufs, ptrs, nested) = parse_syscall_args(&args)?;
+            let pending = this
+                .vm
+                .begin_syscall(nr, filled, bufs, ptrs, nested)
+                .map_err(mlua::Error::external)?;
+            Ok(PendingSyscallUd::new(pending))
+        });
+
+        // vm:read_mem(addr, len) — read `len` bytes from the agent's own
+        // address space at virtual address `addr`. Returns the bytes as a
+        // Lua string on success, or `(nil, errno)` if the read faulted
+        // (e.g. an unmapped address). Lets a test observe memory the
+        // agent mapped but never passed as a syscall buffer — e.g. an
+        // mmap'd KMES ring.
+        methods.add_method("read_mem", |lua, this, (addr, len): (i64, i64)| {
+            let result = this
+                .vm
+                .read_mem(addr as u64, len as u32)
+                .map_err(mlua::Error::external)?;
+            match result {
+                provium_protocol::wire::OpResult::Ok(ok) => {
+                    Ok((Value::String(lua.create_string(&ok.bytes)?), Value::Nil))
+                }
+                provium_protocol::wire::OpResult::Err(e) => {
+                    Ok((Value::Nil, Value::Integer(e.errno as i64)))
+                }
             }
-            table.set("out_bufs", outs)?;
-            Ok(table)
         });
 
         methods.add_method("tail_file", |lua, this, args: mlua::Variadic<Value>| {
@@ -1437,4 +1397,167 @@ fn generate_snapshot_tempfile_path() -> std::path::PathBuf {
         std::process::id(),
         id
     ))
+}
+
+// ---------------------------------------------------------------------
+// Shared Layer-0 syscall helpers — used by `vm:syscall` (synchronous)
+// and `vm:syscall_async` (fire-now, await-later).
+// ---------------------------------------------------------------------
+
+/// Parse the `(nr, {args=…, bufs=…, ptrs=…, nested=…})` table form or
+/// the `(nr, a, b, …)` plain-int form into raw syscall arguments.
+fn parse_syscall_args(
+    args: &mlua::Variadic<Value>,
+) -> mlua::Result<(i64, [i64; 6], Vec<Vec<u8>>, Vec<u8>, Vec<provium_protocol::wire::NestedPtr>)> {
+    let nr_v = args
+        .first()
+        .cloned()
+        .ok_or_else(|| mlua::Error::external("syscall(nr, ...): missing nr"))?;
+    let nr = match nr_v {
+        Value::Integer(n) => n,
+        Value::Number(n) => n as i64,
+        _ => return Err(mlua::Error::external("syscall: nr must be integer")),
+    };
+    let mut filled = [0i64; 6];
+    let mut bufs: Vec<Vec<u8>> = Vec::new();
+    let mut ptrs: Vec<u8> = Vec::new();
+    let mut nested: Vec<provium_protocol::wire::NestedPtr> = Vec::new();
+    let second = args.get(1).cloned();
+    if let Some(Value::Table(t)) = second {
+        if let Ok(arg_tbl) = t.get::<mlua::Table>("args") {
+            for (i, slot) in filled.iter_mut().enumerate() {
+                let v: Option<i64> = arg_tbl.get((i + 1) as i64).ok();
+                if let Some(v) = v {
+                    *slot = v;
+                }
+            }
+        }
+        if let Ok(buf_tbl) = t.get::<mlua::Table>("bufs") {
+            for pair in buf_tbl.sequence_values::<mlua::String>() {
+                let s = pair?;
+                bufs.push(s.as_bytes().to_vec());
+            }
+        }
+        if let Ok(ptr_tbl) = t.get::<mlua::Table>("ptrs") {
+            for pair in ptr_tbl.sequence_values::<u8>() {
+                ptrs.push(pair?);
+            }
+        }
+        // `nested = {{parent=N, child=M, offset=K}, …}` splices bufs[M]'s
+        // address into bufs[N] at byte K. parent/child are 1-based.
+        if let Ok(nested_tbl) = t.get::<mlua::Table>("nested") {
+            for entry in nested_tbl.sequence_values::<mlua::Table>() {
+                let e = entry?;
+                let parent: i64 = e.get("parent")?;
+                let child: i64 = e.get("child")?;
+                let offset: u32 = e.get("offset")?;
+                nested.push(provium_protocol::wire::NestedPtr {
+                    parent: (parent - 1).max(0) as u8,
+                    child: (child - 1).max(0) as u8,
+                    offset,
+                });
+            }
+        }
+    } else {
+        let mut all: Vec<i64> = Vec::new();
+        for v in args.iter().skip(1) {
+            let n = match v {
+                Value::Integer(n) => *n,
+                Value::Number(n) => *n as i64,
+                _ => 0,
+            };
+            all.push(n);
+        }
+        for (i, slot) in filled.iter_mut().enumerate() {
+            if let Some(v) = all.get(i) {
+                *slot = *v;
+            }
+        }
+    }
+    Ok((nr, filled, bufs, ptrs, nested))
+}
+
+/// Build the `{ret, result, errno, out_bufs}` table that both the
+/// synchronous and async syscall paths return to Lua.
+fn syscall_result_table(
+    lua: &mlua::Lua,
+    ret: i64,
+    errno: i32,
+    out_bufs: Vec<Vec<u8>>,
+) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    table.set("ret", ret)?;
+    table.set("result", ret)?;
+    table.set("errno", errno)?;
+    let outs = lua.create_table()?;
+    for (i, b) in out_bufs.into_iter().enumerate() {
+        outs.set(i + 1, lua.create_string(&b)?)?;
+    }
+    table.set("out_bufs", outs)?;
+    Ok(table)
+}
+
+/// Lua handle for a syscall launched by `vm:syscall_async` whose result
+/// hasn't been collected yet. `:await()` blocks for the result; the
+/// underlying agent connection is consumed on the first await.
+pub(crate) struct PendingSyscallUd {
+    pending: std::sync::Mutex<Option<crate::agent_client::PendingSyscall>>,
+}
+
+impl PendingSyscallUd {
+    pub(crate) fn new(pending: crate::agent_client::PendingSyscall) -> Self {
+        Self {
+            pending: std::sync::Mutex::new(Some(pending)),
+        }
+    }
+}
+
+impl UserData for PendingSyscallUd {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        // pending:await() — block for the in-flight syscall's result,
+        // returning the same table shape as vm:syscall.
+        methods.add_method("await", |lua, this, ()| {
+            let pending = this
+                .pending
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| mlua::Error::external("syscall_async: handle already awaited"))?;
+            let r = pending.finish().map_err(mlua::Error::external)?;
+            syscall_result_table(lua, r.ret, r.errno, r.out_bufs)
+        });
+    }
+}
+
+/// Lua handle for a WORKER syscall launched by `worker:syscall_async`
+/// whose result hasn't been collected yet. `:await()` blocks for the
+/// result. The worker's syscall keeps running in the worker process
+/// while the host does other work (e.g. serves an LCS source).
+pub(crate) struct PendingWorkerSyscallUd {
+    pending: std::sync::Mutex<Option<crate::vm::PendingWorkerSyscall>>,
+}
+
+impl PendingWorkerSyscallUd {
+    pub(crate) fn new(pending: crate::vm::PendingWorkerSyscall) -> Self {
+        Self {
+            pending: std::sync::Mutex::new(Some(pending)),
+        }
+    }
+}
+
+impl UserData for PendingWorkerSyscallUd {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("await", |lua, this, ()| {
+            let pending = this
+                .pending
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| {
+                    mlua::Error::external("worker:syscall_async: handle already awaited")
+                })?;
+            let r = pending.finish().map_err(mlua::Error::external)?;
+            syscall_result_table(lua, r.ret, r.errno, r.out_bufs)
+        });
+    }
 }

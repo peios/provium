@@ -51,14 +51,16 @@ pub use ops::{
     OpenFileArgs, OpenFileResult, OpenMode, ProcStatusArgs, ProcStatusResult, ProcStdinCloseArgs,
     ProcStdinCloseResult, ProcStdinWriteArgs, ProcStdinWriteOk, ProcStdinWriteResult,
     ProcStreamArgs, ProcStreamChannel, ProcStreamResult, ProcessLiveStatus, ReadArgs, ReadFileArgs,
-    ReadFileResult, ReadOk, ReadResult, RenameArgs, RenameResult, RunAsyncArgs, RunAsyncResult,
+    ReadFileResult, ReadMemArgs, ReadMemOk, ReadMemResult, ReadOk, ReadResult, RenameArgs,
+    RenameResult, RunAsyncArgs, RunAsyncResult,
     SeekArgs, SeekResult, SeekWhence, SetTimeArgs, SetTimeResult, SleepClockArgs, SleepClockResult,
     SpawnWorkerArgs, SpawnWorkerResult, StatArgs, StatResult, SyscallArgs, SyscallResult,
     TailFileArgs, TailFileResult, TailStart, UnlinkArgs, UnlinkResult, WaitArgs, WaitResult,
     WorkerExecArgs, WorkerExecResult, WorkerJoinArgs, WorkerJoinPayload, WorkerJoinResult,
     WorkerKillArgs,
     WorkerKillResult, WorkerOpenFileArgs, WorkerOpenFileResult, WorkerRunAsyncArgs,
-    WorkerRunAsyncResult, WorkerSyscallArgs, WorkerSyscallResult, WriteArgs, WriteFileArgs,
+    WorkerRunAsyncResult, WorkerSyscallArgs, WorkerSyscallAwaitArgs, WorkerSyscallAwaitResult,
+    WorkerSyscallBeginArgs, WorkerSyscallBeginResult, WorkerSyscallResult, WriteArgs, WriteFileArgs,
     WriteFileMode, WriteFileResult, WriteOk, WriteResult,
 };
 
@@ -129,6 +131,11 @@ pub enum HostMessage {
     /// Layer-0 raw syscall.
     Syscall(crate::wire::ops::SyscallArgs),
 
+    /// Read `len` bytes from the agent's own address space at `addr` —
+    /// lets the host observe memory the agent mapped but never passed
+    /// as a syscall buffer (e.g. an `mmap`'d KMES ring).
+    ReadMem(crate::wire::ops::ReadMemArgs),
+
     /// Allocate a sub-agent worker.
     SpawnWorker(crate::wire::ops::SpawnWorkerArgs),
     /// Run an exec against a worker.
@@ -176,6 +183,11 @@ pub enum HostMessage {
     WorkerOpenFile(crate::wire::ops::WorkerOpenFileArgs),
     /// Per-worker raw syscall.
     WorkerSyscall(crate::wire::ops::WorkerSyscallArgs),
+    /// Per-worker raw syscall, started async (non-blocking): the worker
+    /// runs it on a background thread and returns an async handle.
+    WorkerSyscallBegin(crate::wire::ops::WorkerSyscallBeginArgs),
+    /// Collect a [`HostMessage::WorkerSyscallBegin`] result by its handle.
+    WorkerSyscallAwait(crate::wire::ops::WorkerSyscallAwaitArgs),
     /// Broadcast a signal to every process in a worker.
     WorkerKill(crate::wire::ops::WorkerKillArgs),
 
@@ -245,6 +257,9 @@ pub enum AgentMessage {
     /// Result of [`HostMessage::Syscall`].
     SyscallResult(crate::wire::ops::SyscallResult),
 
+    /// Result of [`HostMessage::ReadMem`].
+    ReadMemResult(crate::wire::ops::ReadMemResult),
+
     /// Result of [`HostMessage::SpawnWorker`].
     SpawnWorkerResult(crate::wire::ops::SpawnWorkerResult),
     /// Result of [`HostMessage::WorkerExec`].
@@ -284,6 +299,10 @@ pub enum AgentMessage {
     WorkerOpenFileResult(crate::wire::ops::WorkerOpenFileResult),
     /// Result of [`HostMessage::WorkerSyscall`].
     WorkerSyscallResult(crate::wire::ops::WorkerSyscallResult),
+    /// Result of [`HostMessage::WorkerSyscallBegin`] — the async handle.
+    WorkerSyscallBeginResult(crate::wire::ops::WorkerSyscallBeginResult),
+    /// Result of [`HostMessage::WorkerSyscallAwait`] — the syscall result.
+    WorkerSyscallAwaitResult(crate::wire::ops::WorkerSyscallAwaitResult),
     /// Result of [`HostMessage::WorkerKill`].
     WorkerKillResult(crate::wire::ops::WorkerKillResult),
 
@@ -330,6 +349,7 @@ impl HostMessage {
             Self::SleepClock(_) => "sleep_clock",
             Self::AdvanceClock(_) => "advance_clock",
             Self::Syscall(_) => "syscall",
+            Self::ReadMem(_) => "read_mem",
             Self::SpawnWorker(_) => "spawn_worker",
             Self::WorkerExec(_) => "worker_exec",
             Self::WorkerJoin(_) => "worker_join",
@@ -347,6 +367,8 @@ impl HostMessage {
             Self::WorkerRunAsync(_) => "worker_run_async",
             Self::WorkerOpenFile(_) => "worker_open_file",
             Self::WorkerSyscall(_) => "worker_syscall",
+            Self::WorkerSyscallBegin(_) => "worker_syscall_begin",
+            Self::WorkerSyscallAwait(_) => "worker_syscall_await",
             Self::WorkerKill(_) => "worker_kill",
             Self::BatchExec(_) => "batch_exec",
             Self::BatchOp(_) => "batch_op",
@@ -378,6 +400,7 @@ impl AgentMessage {
             Self::SleepClockResult(_) => "sleep_clock_result",
             Self::AdvanceClockResult(_) => "advance_clock_result",
             Self::SyscallResult(_) => "syscall_result",
+            Self::ReadMemResult(_) => "read_mem_result",
             Self::SpawnWorkerResult(_) => "spawn_worker_result",
             Self::WorkerExecResult(_) => "worker_exec_result",
             Self::WorkerJoinResult(_) => "worker_join_result",
@@ -395,6 +418,8 @@ impl AgentMessage {
             Self::WorkerRunAsyncResult(_) => "worker_run_async_result",
             Self::WorkerOpenFileResult(_) => "worker_open_file_result",
             Self::WorkerSyscallResult(_) => "worker_syscall_result",
+            Self::WorkerSyscallBeginResult(_) => "worker_syscall_begin_result",
+            Self::WorkerSyscallAwaitResult(_) => "worker_syscall_await_result",
             Self::WorkerKillResult(_) => "worker_kill_result",
             Self::BatchExecResult(_) => "batch_exec_result",
             Self::BatchOpResult(_) => "batch_op_result",

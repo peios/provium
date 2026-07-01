@@ -29,13 +29,14 @@ use thiserror::Error;
 
 use provium_protocol::wire::{
     CloseArgs, DirEntry, ExecArgs, ExecResult, ExitStatus, IoctlArgs, IoctlOk, KillArgs,
-    ListdirArgs, MkdirArgs, OpResult, OpenFileArgs, OpenMode, ReadArgs, ReadFileArgs, RenameArgs,
+    ListdirArgs, MkdirArgs, OpResult, OpenFileArgs, OpenMode, ReadArgs, ReadFileArgs, ReadMemArgs,
+    ReadMemResult, RenameArgs,
     RunAsyncArgs, SeekArgs, SeekWhence, StatArgs, TailFileArgs, TailStart, UnlinkArgs, WaitArgs,
     WriteArgs, WriteFileArgs, WriteFileMode,
 };
 use provium_protocol::OsError;
 
-use crate::agent_client::{AgentClient, TailFileOutcome, TailFileSession};
+use crate::agent_client::{AgentClient, PendingSyscall, TailFileOutcome, TailFileSession};
 use crate::profile::Profile;
 use crate::vmm::{BootOpts, VmInstance, Vmm, VmmError};
 use crate::ClientError;
@@ -1179,6 +1180,38 @@ impl Vm {
         })
     }
 
+    /// Read `len` bytes from the agent's own address space at virtual
+    /// address `addr`. The returned [`ReadMemResult`] carries either the
+    /// bytes (`Ok`) or the OS error from a faulting read (`Err`) — a bad
+    /// address is testable data, not a [`VmError`], which is reserved
+    /// for transport / state failures.
+    pub fn read_mem(&self, addr: u64, len: u32) -> Result<ReadMemResult, VmError> {
+        self.with_client("read_mem", |client| {
+            client
+                .read_mem(ReadMemArgs { addr, len })
+                .map_err(VmError::Client)
+        })
+    }
+
+    /// Send a syscall without waiting for its result, returning a
+    /// [`PendingSyscall`]. The handle owns its own connection, so it
+    /// outlives the brief client borrow taken here — letting a blocking
+    /// syscall stay in flight while the host drives other ops.
+    pub fn begin_syscall(
+        &self,
+        nr: i64,
+        args: [i64; 6],
+        bufs: Vec<Vec<u8>>,
+        ptrs: Vec<u8>,
+        nested: Vec<provium_protocol::wire::NestedPtr>,
+    ) -> Result<PendingSyscall, VmError> {
+        self.with_client("syscall_async", |client| {
+            client
+                .begin_syscall(provium_protocol::wire::SyscallArgs { nr, args, bufs, ptrs, nested })
+                .map_err(VmError::Client)
+        })
+    }
+
     // -----------------------------------------------------------------
     // Layer-1 ops — only valid in `Booted`.
     // -----------------------------------------------------------------
@@ -2070,6 +2103,40 @@ impl Worker {
         })
     }
 
+    /// Like [`Worker::syscall_with_bufs`] but non-blocking: the worker
+    /// runs the syscall on a background thread and returns immediately.
+    /// The host stays free (e.g. to serve an LCS source the worker's op
+    /// is blocked on) until [`PendingWorkerSyscall::finish`] collects the
+    /// result. Mirrors [`Vm::begin_syscall`] one process down.
+    pub fn begin_syscall_with_bufs(
+        &self,
+        nr: i64,
+        args: [i64; 6],
+        bufs: Vec<Vec<u8>>,
+        ptrs: Vec<u8>,
+        nested: Vec<provium_protocol::wire::NestedPtr>,
+    ) -> Result<PendingWorkerSyscall, VmError> {
+        let async_id = self.vm.with_client("worker_syscall_begin", |client| {
+            client
+                .worker_syscall_begin(provium_protocol::wire::WorkerSyscallBeginArgs {
+                    handle: self.handle,
+                    args: provium_protocol::wire::SyscallArgs {
+                        nr,
+                        args,
+                        bufs,
+                        ptrs,
+                        nested,
+                    },
+                })
+                .map_err(VmError::Client)
+        })?;
+        Ok(PendingWorkerSyscall {
+            vm: self.vm.clone(),
+            handle: self.handle,
+            async_id,
+        })
+    }
+
     /// Read access to the parent VM. Used by Lua bindings that
     /// need to wrap returned file handles back into the parent's
     /// userdata.
@@ -2092,6 +2159,39 @@ impl Worker {
             OpResult::Ok(n) => Ok(n),
             OpResult::Err(e) => Err(VmError::Os(e)),
         }
+    }
+}
+
+/// A worker syscall launched by [`Worker::begin_syscall_with_bufs`] whose
+/// result hasn't been collected yet. The worker's syscall keeps running
+/// (on a background thread in the worker process) while the host does
+/// other work; [`Self::finish`] blocks for the result.
+#[derive(Clone, Debug)]
+pub struct PendingWorkerSyscall {
+    vm: Vm,
+    handle: provium_protocol::handle::WorkerHandle,
+    async_id: u64,
+}
+
+impl PendingWorkerSyscall {
+    /// Block until the worker's background syscall completes and return
+    /// its result. Opens a fresh connection (the worker is reached via
+    /// the parent agent), so the host's other connections stayed free
+    /// while the syscall was in flight.
+    pub fn finish(self) -> Result<SyscallResult, VmError> {
+        let r = self.vm.with_client("worker_syscall_await", |client| {
+            client
+                .worker_syscall_await(provium_protocol::wire::WorkerSyscallAwaitArgs {
+                    handle: self.handle,
+                    async_id: self.async_id,
+                })
+                .map_err(VmError::Client)
+        })?;
+        Ok(SyscallResult {
+            ret: r.ret,
+            errno: r.errno,
+            out_bufs: r.out_bufs,
+        })
     }
 }
 
