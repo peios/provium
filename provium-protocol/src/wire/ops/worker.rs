@@ -99,6 +99,37 @@ pub struct WorkerSyscallArgs {
 /// `WorkerSyscall` payload.
 pub type WorkerSyscallResult = SyscallResult;
 
+/// `WorkerSyscallBegin` — start a raw syscall in the worker process
+/// WITHOUT waiting for it. The worker runs the syscall on a background
+/// thread and returns an opaque async handle immediately, so the host
+/// stays free (e.g. to serve an LCS source) while the worker's syscall
+/// blocks. Collect the result later with [`WorkerSyscallAwaitArgs`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerSyscallBeginArgs {
+    /// Worker handle.
+    pub handle: WorkerHandle,
+    /// Inner syscall args (same shape as [`WorkerSyscallArgs::args`]).
+    pub args: SyscallArgs,
+}
+
+/// `WorkerSyscallBegin` payload — the in-flight syscall's async handle
+/// (unique within that worker), or an error if the begin failed.
+pub type WorkerSyscallBeginResult = OpResult<u64>;
+
+/// `WorkerSyscallAwait` — collect the result of a syscall previously
+/// started with [`WorkerSyscallBeginArgs`]. Blocks until the worker's
+/// background syscall thread completes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerSyscallAwaitArgs {
+    /// Worker handle.
+    pub handle: WorkerHandle,
+    /// The async handle returned by `WorkerSyscallBegin`.
+    pub async_id: u64,
+}
+
+/// `WorkerSyscallAwait` payload — the completed syscall result.
+pub type WorkerSyscallAwaitResult = SyscallResult;
+
 /// `WorkerKill` — broadcast a signal to every process in the
 /// worker's namespace. Used by `worker:kill(sig)` to terminate
 /// in-flight async children before `worker:join`.

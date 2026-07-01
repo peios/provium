@@ -1,0 +1,22 @@
+[env]
+TC = "$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin"
+PATH = "$TC:$PATH"
+CARGO = "$TC/cargo"
+RUSTC = "$TC/rustc"
+
+# The `provium` binary lives in provium-host and is gated behind the
+# `lua` + `local-agent` features (see its `[[bin]]` required-features).
+[build]
+command = "cargo build --release --bin provium --features lua,local-agent"
+
+[install.main]
+command = "cargo install --path provium-host --bin provium --features lua,local-agent"
+
+[install.coverage]
+command = "cargo install --path provium-coverage --bin provium-coverage"
+
+[test]
+command = "cargo test"
+
+[clean]
+command = "cargo clean"

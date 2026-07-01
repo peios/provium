@@ -11,15 +11,49 @@
 //! split lets allocation happen without contending on the table lock,
 //! but every table mutation still serializes — see
 //! `with_file_mut` for the common idiom.
+//!
+//! ## Workers are real processes
+//!
+//! A [`WorkerConn`] is a *separate OS process* — a re-exec'd copy of the
+//! agent running [`crate::connection::serve_worker_child`] over a
+//! `socketpair(2)` control channel. Unlike the parent's handler threads
+//! (which share one process identity), a worker has its own kernel
+//! credentials: token, PSB, privileges. That is the whole point — it
+//! lets a test pit two distinct security principals against each other
+//! in one VM (the caller vs. the target of a process-SD check, an
+//! unprivileged caller vs. a privileged operation, an SCM_RIGHTS peer).
+//! Ops targeting a worker (`WorkerSyscall`, `WorkerExec`) are *relayed*
+//! down the control socket and execute in the child; see
+//! [`crate::ops::worker`].
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::os::unix::net::UnixStream;
 use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use provium_protocol::handle::{FileHandle, ProcessHandle, WorkerHandle};
+
+/// A live worker: the re-exec'd sub-agent child process plus the parent
+/// end of the `socketpair(2)` used to relay ops to it.
+///
+/// The `control` socket carries the ordinary agent wire protocol: the
+/// parent writes a [`provium_protocol::wire::HostMessage`] frame, the
+/// child executes it in *its* process context and writes back a
+/// [`provium_protocol::wire::AgentMessage`] frame. Held behind a
+/// [`Mutex`] so a relayed request/response round-trip is atomic per
+/// worker even if the host pipelines ops from multiple connections.
+#[derive(Debug)]
+pub struct WorkerConn {
+    /// The sub-agent process. Reaped on `worker_join`, signalled on
+    /// `worker_kill`.
+    pub child: Child,
+    /// Parent end of the control `socketpair`. Dropping it gives the
+    /// child EOF, which ends its serve loop.
+    pub control: UnixStream,
+}
 
 /// Shared agent state. Wrap in [`std::sync::Arc`] and clone into each
 /// handler thread.
@@ -35,17 +69,9 @@ pub struct AgentState {
     /// the join handles for the stdout/stderr drain threads spawned
     /// at `RunAsync` time.
     processes: Mutex<HashMap<ProcessHandle, ProcessSlot>>,
-    /// Worker (sub-agent) registry. Each worker owns its own
-    /// file table + process table — Phase E isolated this from
-    /// the parent agent's state so worker:open_file doesn't
-    /// collide with the host VM's open-file namespace.
-    workers: Mutex<HashMap<WorkerHandle, std::sync::Arc<AgentState>>>,
-    /// Membership map: worker handle → set of process handles
-    /// spawned via `WorkerRunAsync`. Used by `worker_kill` /
-    /// `worker_join` to target only that worker's children even
-    /// though the actual `ProcessSlot` lives in the parent's
-    /// process table (see `worker_run_async` rationale comment).
-    worker_processes: Mutex<HashMap<WorkerHandle, std::collections::HashSet<ProcessHandle>>>,
+    /// Worker (sub-agent) registry. Each entry is a real child process
+    /// reachable over its control socket — see [`WorkerConn`].
+    workers: Mutex<HashMap<WorkerHandle, Arc<Mutex<WorkerConn>>>>,
 }
 
 /// Per-process state held while the child is alive.
@@ -76,75 +102,39 @@ impl AgentState {
             files: Mutex::new(HashMap::new()),
             processes: Mutex::new(HashMap::new()),
             workers: Mutex::new(HashMap::new()),
-            worker_processes: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Record `process` as belonging to `worker`'s namespace.
-    /// Called from `worker_run_async` immediately after a successful
-    /// spawn so a later `worker_kill` / `worker_join` can find this
-    /// child even though the `ProcessSlot` itself sits in the
-    /// parent's process table.
-    pub fn bind_process_to_worker(
-        &self,
-        worker: WorkerHandle,
-        process: ProcessHandle,
-    ) {
-        self.worker_processes
-            .lock()
-            .unwrap()
-            .entry(worker)
-            .or_default()
-            .insert(process);
+    /// Allocate a fresh monotonic handle id. Shared by every table so
+    /// a worker, process, and file never collide on a raw id.
+    fn alloc_id(&self) -> u64 {
+        self.next_handle.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Pop the set of process handles bound to `worker`. Used by
-    /// `worker_kill` (which signals the live ones) and
-    /// `worker_join` (which reaps + sums exit codes).
-    pub fn take_worker_processes(
-        &self,
-        worker: WorkerHandle,
-    ) -> std::collections::HashSet<ProcessHandle> {
-        self.worker_processes
+    // --- Workers -----------------------------------------------------
+
+    /// Register an already-spawned worker child and return its handle.
+    /// The spawn itself (socketpair + re-exec) lives in
+    /// [`crate::ops::worker::spawn`]; this just files the connection.
+    pub fn insert_worker_conn(&self, conn: WorkerConn) -> WorkerHandle {
+        let handle = WorkerHandle::new(self.alloc_id());
+        self.workers
             .lock()
             .unwrap()
-            .remove(&worker)
-            .unwrap_or_default()
-    }
-
-    /// Read the current set of process handles for `worker`
-    /// without removing the entry. Used by `worker_kill` so a
-    /// subsequent `worker_join` still has the same set to reap.
-    pub fn worker_process_handles(
-        &self,
-        worker: WorkerHandle,
-    ) -> std::collections::HashSet<ProcessHandle> {
-        self.worker_processes
-            .lock()
-            .unwrap()
-            .get(&worker)
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    /// Allocate a new worker handle. The worker's state has its
-    /// own file + process tables (separate from `self`'s).
-    pub fn insert_worker(self: &std::sync::Arc<Self>) -> WorkerHandle {
-        let id = self.next_handle.fetch_add(1, Ordering::Relaxed);
-        let handle = WorkerHandle::new(id);
-        let worker_state = std::sync::Arc::new(AgentState::new());
-        self.workers.lock().unwrap().insert(handle, worker_state);
+            .insert(handle, Arc::new(Mutex::new(conn)));
         handle
     }
 
-    /// Look up a worker's state. Used by [`with_worker_state`].
-    pub fn worker_state(&self, handle: WorkerHandle) -> Option<std::sync::Arc<AgentState>> {
+    /// Look up a worker's connection without removing it. Used by the
+    /// relay ops (`worker_syscall`, `worker_exec`) and `worker_kill`.
+    pub fn worker_conn(&self, handle: WorkerHandle) -> Option<Arc<Mutex<WorkerConn>>> {
         self.workers.lock().unwrap().get(&handle).cloned()
     }
 
-    /// Remove a worker's state from the registry.
-    pub fn remove_worker(&self, handle: WorkerHandle) -> bool {
-        self.workers.lock().unwrap().remove(&handle).is_some()
+    /// Remove a worker from the registry, returning its connection so
+    /// the caller can reap the child. Used by `worker_join`.
+    pub fn remove_worker_conn(&self, handle: WorkerHandle) -> Option<Arc<Mutex<WorkerConn>>> {
+        self.workers.lock().unwrap().remove(&handle)
     }
 
     /// `true` if `handle` is a live worker.
@@ -152,11 +142,15 @@ impl AgentState {
         self.workers.lock().unwrap().contains_key(&handle)
     }
 
-    /// Number of currently-tracked workers.
-    /// Send `signal` to every process in this state's process
-    /// table. Returns the count of processes signalled. Used by
-    /// `worker_kill` to broadcast termination to a worker's
-    /// children.
+    /// Number of currently-tracked workers. Test / introspection only.
+    pub fn open_worker_count(&self) -> usize {
+        self.workers.lock().unwrap().len()
+    }
+
+    // --- Async processes ---------------------------------------------
+
+    /// Send `signal` to every process in this state's process table.
+    /// Returns the count of processes signalled.
     pub fn signal_all(&self, signal: i32) -> u32 {
         let mut count = 0u32;
         for slot in self.processes.lock().unwrap().values_mut() {
@@ -173,55 +167,9 @@ impl AgentState {
         count
     }
 
-    /// Send `signal` to each process named in `handles` whose
-    /// slot is still live in this state's process table. Returns
-    /// the count of signalled processes. Used by `worker_kill` to
-    /// target only that worker's children when the slots actually
-    /// live in the parent's process table (see worker_run_async
-    /// rationale).
-    pub fn signal_processes(
-        &self,
-        handles: &std::collections::HashSet<ProcessHandle>,
-        signal: i32,
-    ) -> u32 {
-        let mut count = 0u32;
-        let procs = self.processes.lock().unwrap();
-        for h in handles {
-            if let Some(slot) = procs.get(h) {
-                if let Some(child) = slot.child.as_ref() {
-                    let pid = child.id() as libc::pid_t;
-                    // SAFETY: pid is valid for child lifetime.
-                    unsafe {
-                        libc::kill(pid, signal);
-                    }
-                    count += 1;
-                }
-            }
-        }
-        count
-    }
-
-    /// Wait for each process named in `handles` to exit, draining
-    /// its stdout/stderr threads. Returns the worst exit status
-    /// (or 0 when no children ran / all exited cleanly). Mirrors
-    /// [`Self::reap_all_processes`] but scoped to a worker's
-    /// child set.
-    pub fn reap_processes(
-        &self,
-        handles: &std::collections::HashSet<ProcessHandle>,
-    ) -> i32 {
-        let drained: Vec<ProcessSlot> = {
-            let mut procs = self.processes.lock().unwrap();
-            handles.iter().filter_map(|h| procs.remove(h)).collect()
-        };
-        reap_slots(drained)
-    }
-
     /// Wait for every process registered in this state to exit
     /// and report the worst (max) exit status seen. A signalled
     /// child contributes `128 + signo`, matching shell convention.
-    /// Used by `worker_join` to give the host a single
-    /// `exit_status` it can hand back to Lua.
     pub fn reap_all_processes(&self) -> i32 {
         let drained: Vec<ProcessSlot> = {
             let mut procs = self.processes.lock().unwrap();
@@ -230,14 +178,9 @@ impl AgentState {
         reap_slots(drained)
     }
 
-    pub fn open_worker_count(&self) -> usize {
-        self.workers.lock().unwrap().len()
-    }
-
     /// Insert a [`ProcessSlot`] under a freshly-allocated handle.
     pub fn insert_process(&self, slot: ProcessSlot) -> ProcessHandle {
-        let id = self.next_handle.fetch_add(1, Ordering::Relaxed);
-        let handle = ProcessHandle::new(id);
+        let handle = ProcessHandle::new(self.alloc_id());
         self.processes.lock().unwrap().insert(handle, slot);
         handle
     }
@@ -265,10 +208,11 @@ impl AgentState {
         self.processes.lock().unwrap().len()
     }
 
+    // --- Files -------------------------------------------------------
+
     /// Insert `file` and return its freshly-allocated handle.
     pub fn insert_file(&self, file: File) -> FileHandle {
-        let id = self.next_handle.fetch_add(1, Ordering::Relaxed);
-        let handle = FileHandle::new(id);
+        let handle = FileHandle::new(self.alloc_id());
         self.files.lock().unwrap().insert(handle, file);
         handle
     }
@@ -308,10 +252,7 @@ impl Default for AgentState {
 /// Drain a list of [`ProcessSlot`]s, waiting for each child to
 /// exit and joining its stdout/stderr drain threads. Returns the
 /// worst (max) exit status, where a signalled child contributes
-/// `128 + signo` (shell convention). Used by both
-/// [`AgentState::reap_all_processes`] and
-/// [`AgentState::reap_processes`] so the per-worker and
-/// agent-wide reap paths share their semantics.
+/// `128 + signo` (shell convention).
 fn reap_slots(slots: Vec<ProcessSlot>) -> i32 {
     let mut worst: i32 = 0;
     for mut slot in slots {

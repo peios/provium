@@ -7,6 +7,7 @@ pub mod exec;
 pub mod file;
 pub mod ioctl;
 pub mod process;
+pub mod read_mem;
 pub mod stream;
 pub mod syscall;
 pub mod worker;

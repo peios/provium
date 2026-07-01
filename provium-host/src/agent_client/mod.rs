@@ -20,7 +20,8 @@ use provium_protocol::wire::{
     AdvanceClockArgs, AdvanceClockResult, AgentMessage, CloseArgs, CloseResult, ExecArgs,
     ExecResult, GetPidArgs, GetPidResult, GetTimeArgs, GetTimeResult, Hello, HostMessage, KillArgs,
     KillResult, OpenFileArgs,
-    OpenFileResult, ReadArgs, ReadFileArgs, ReadFileResult, ReadResult, RunAsyncArgs,
+    OpenFileResult, ReadArgs, ReadFileArgs, ReadFileResult, ReadMemArgs, ReadMemResult, ReadResult,
+    RunAsyncArgs,
     RunAsyncResult, SetTimeArgs, SetTimeResult, SleepClockArgs, SleepClockResult, StatArgs,
     StatResult, SyscallArgs, SyscallResult, TailFileArgs, WaitArgs, WaitResult, WriteArgs,
     WriteFileArgs, WriteFileResult, WriteResult,
@@ -46,6 +47,31 @@ pub struct AgentClient {
 impl std::fmt::Debug for AgentClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentClient").finish()
+    }
+}
+
+/// A syscall sent via [`AgentClient::begin_syscall`] whose result has
+/// not been collected yet. Owns the open connection; the agent may be
+/// blocked inside the syscall until the host drives whatever it's
+/// waiting on. [`PendingSyscall::finish`] blocks for the result.
+pub struct PendingSyscall {
+    stream: Box<dyn AgentStream>,
+}
+
+impl std::fmt::Debug for PendingSyscall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingSyscall").finish()
+    }
+}
+
+impl PendingSyscall {
+    /// Block until the agent returns the in-flight syscall's result.
+    pub fn finish(mut self) -> Result<SyscallResult, ClientError> {
+        match recv(&mut self.stream)? {
+            AgentMessage::SyscallResult(r) => Ok(r),
+            AgentMessage::AgentError(e) => Err(e.into()),
+            other => Err(unexpected("syscall_result", &other)),
+        }
     }
 }
 
@@ -310,6 +336,35 @@ impl AgentClient {
             AgentMessage::AgentError(e) => Err(e.into()),
             other => Err(unexpected("syscall_result", &other)),
         }
+    }
+
+    /// Read `len` bytes from the agent's own address space at `addr`.
+    /// The agent reads itself fault-safely, so an unmapped address comes
+    /// back as `ReadMemResult::Err`, not a dead agent.
+    pub fn read_mem(&self, args: ReadMemArgs) -> Result<ReadMemResult, ClientError> {
+        let mut stream = self.open_with_handshake()?;
+        send(&mut stream, HostMessage::ReadMem(args))?;
+        match recv(&mut stream)? {
+            AgentMessage::ReadMemResult(r) => Ok(r),
+            AgentMessage::AgentError(e) => Err(e.into()),
+            other => Err(unexpected("read_mem_result", &other)),
+        }
+    }
+
+    /// Send a syscall *without* waiting for its result. Returns a
+    /// [`PendingSyscall`] that owns the open connection; call
+    /// [`PendingSyscall::finish`] to collect the result later.
+    ///
+    /// Each op uses its own connection and the agent runs each on its
+    /// own thread within a single process (so they share the fd table
+    /// and address space). That lets a *blocking* syscall — e.g. one
+    /// waiting on an RSI response from a registry source — stay in
+    /// flight here while the host drives the serving ops on other
+    /// connections, then collect the original result.
+    pub fn begin_syscall(&self, args: SyscallArgs) -> Result<PendingSyscall, ClientError> {
+        let mut stream = self.open_with_handshake()?;
+        send(&mut stream, HostMessage::Syscall(args))?;
+        Ok(PendingSyscall { stream })
     }
 
     /// Spawn a sub-agent worker.
@@ -585,6 +640,43 @@ impl AgentClient {
             AgentMessage::WorkerSyscallResult(r) => Ok(r),
             AgentMessage::AgentError(e) => Err(e.into()),
             other => Err(unexpected("worker_syscall_result", &other)),
+        }
+    }
+
+    /// Start a per-worker syscall async (non-blocking): the worker runs
+    /// it on a background thread and returns an opaque async handle, so
+    /// the host stays free (e.g. to serve a source) while it blocks.
+    /// Collect the result later with [`Self::worker_syscall_await`].
+    pub fn worker_syscall_begin(
+        &self,
+        args: provium_protocol::wire::WorkerSyscallBeginArgs,
+    ) -> Result<u64, ClientError> {
+        let mut stream = self.open_with_handshake()?;
+        send(&mut stream, HostMessage::WorkerSyscallBegin(args))?;
+        match recv(&mut stream)? {
+            AgentMessage::WorkerSyscallBeginResult(provium_protocol::wire::OpResult::Ok(id)) => {
+                Ok(id)
+            }
+            AgentMessage::WorkerSyscallBeginResult(provium_protocol::wire::OpResult::Err(os)) => {
+                Err(ClientError::StreamSource(os))
+            }
+            AgentMessage::AgentError(e) => Err(e.into()),
+            other => Err(unexpected("worker_syscall_begin_result", &other)),
+        }
+    }
+
+    /// Collect a [`Self::worker_syscall_begin`] result by its async
+    /// handle. Blocks until the worker's background syscall completes.
+    pub fn worker_syscall_await(
+        &self,
+        args: provium_protocol::wire::WorkerSyscallAwaitArgs,
+    ) -> Result<provium_protocol::wire::SyscallResult, ClientError> {
+        let mut stream = self.open_with_handshake()?;
+        send(&mut stream, HostMessage::WorkerSyscallAwait(args))?;
+        match recv(&mut stream)? {
+            AgentMessage::WorkerSyscallAwaitResult(r) => Ok(r),
+            AgentMessage::AgentError(e) => Err(e.into()),
+            other => Err(unexpected("worker_syscall_await_result", &other)),
         }
     }
 

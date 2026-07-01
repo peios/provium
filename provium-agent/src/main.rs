@@ -8,18 +8,41 @@
 //! socket itself dying) cause exit.
 
 use std::env;
+use std::os::unix::io::{FromRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::process;
 use std::sync::Arc;
 use std::thread;
 
 use vsock::{VsockListener, VMADDR_CID_ANY};
 
-use provium_agent::connection::{handle_connection, ConnectionOutcome};
+use provium_agent::connection::{handle_connection, serve_worker_child, ConnectionOutcome};
 use provium_agent::{init, AgentState};
 
 const DEFAULT_PORT: u32 = 1234;
 
 fn main() {
+    // Worker (sub-agent) mode: launched by a parent agent as
+    // `provium-agent --worker-fd N`, where N is the child end of a
+    // socketpair the parent relays ops over. We are a plain child
+    // process — not PID 1, no vsock — so we skip init duties and the
+    // listener entirely and just serve the control channel until the
+    // parent closes it. This is the whole mechanism behind a worker
+    // having its own kernel credentials (token/PSB/privileges).
+    if let Some(fd) = worker_fd_from_args() {
+        // SAFETY: the parent passed us this fd's number across exec and
+        // cleared FD_CLOEXEC on it; it is an open AF_UNIX stream that we
+        // now own exclusively.
+        let stream = unsafe { UnixStream::from_raw_fd(fd) };
+        match serve_worker_child(stream) {
+            Ok(()) => process::exit(0),
+            Err(e) => {
+                eprintln!("provium-agent (worker): {e}");
+                process::exit(1);
+            }
+        }
+    }
+
     // If we're PID 1 (booted as `/init` from an initrd), perform the
     // standard mount sequence before doing anything else. No-op when
     // running under a real init system that has already mounted these.
@@ -86,6 +109,27 @@ fn serve_connection(mut stream: vsock::VsockStream, state: Arc<AgentState>) {
             eprintln!("provium-agent: connection error: {e}");
         }
     }
+}
+
+/// Scan argv for `--worker-fd N`, returning the raw fd if present. A
+/// malformed value aborts the process: a worker that can't find its
+/// control channel has nothing useful to do.
+fn worker_fd_from_args() -> Option<RawFd> {
+    let mut args = env::args();
+    let _ = args.next(); // program name
+    while let Some(a) = args.next() {
+        if a == "--worker-fd" {
+            let v = args.next().unwrap_or_else(|| {
+                eprintln!("provium-agent: --worker-fd requires a value");
+                process::exit(2);
+            });
+            return Some(v.parse::<RawFd>().unwrap_or_else(|e| {
+                eprintln!("provium-agent: --worker-fd: {e}");
+                process::exit(2);
+            }));
+        }
+    }
+    None
 }
 
 fn parse_port_from_env_or_args() -> Result<u32, String> {

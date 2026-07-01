@@ -5,6 +5,7 @@
 //! `std::os::unix::net::UnixStream`.
 
 use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
 use provium_protocol::wire::{
@@ -87,6 +88,85 @@ where
     Ok(ConnectionOutcome::Handled)
 }
 
+/// Serve a worker (sub-agent) control channel until the parent closes it.
+///
+/// A worker is a re-exec'd copy of the agent launched with
+/// `--worker-fd N`, where `N` is the child end of a `socketpair(2)` the
+/// parent agent relays ops over (see [`crate::ops::worker`]). This loop
+/// differs from [`handle_connection`] in two ways:
+///
+/// * **No handshake.** Both ends are the same binary at the same
+///   protocol version, so there is no `Hello`/`HelloOk` exchange — the
+///   first frame is already an op.
+/// * **Many ops, one channel.** The parent reuses the socket for the
+///   worker's whole lifetime, so we loop one op per frame until a read
+///   fails (EOF when the parent drops its end), rather than servicing a
+///   single op and returning.
+///
+/// The child runs every op in *its own* process context — that is the
+/// entire reason a worker exists — so a `Syscall` here carries the
+/// worker's token/PSB/privileges, not the parent's. Only short
+/// (non-stream) ops are relayed to a worker in the v1 model; stream ops
+/// keep their own dedicated connection to the parent and are reported
+/// as a `BadRequest` by [`dispatch_short`].
+pub fn serve_worker_child(stream: UnixStream) -> Result<(), AgentRuntimeError> {
+    let state = Arc::new(AgentState::new());
+    // Split read/write halves; on a Unix stream both share the same
+    // underlying socket so try_clone is an fd-level dup.
+    let mut reader = match stream.try_clone() {
+        Ok(r) => r,
+        Err(_) => return Ok(()),
+    };
+    let mut writer = stream;
+    // In-flight async syscalls: handle -> the thread computing its result.
+    // A `WorkerSyscallBegin` spawns a thread (so this serve loop stays free
+    // to receive the eventual `WorkerSyscallAwait` and other ops while the
+    // worker's syscall blocks); `WorkerSyscallAwait` joins it. This is the
+    // in-process analogue of the agent's connection-per-async-syscall model.
+    let mut pending: std::collections::HashMap<u64, std::thread::JoinHandle<AgentMessage>> =
+        std::collections::HashMap::new();
+    let mut next_async: u64 = 1;
+    loop {
+        let op = match read_host_message(&mut reader) {
+            Ok(op) => op,
+            // A read failure means the parent closed (or reset) the
+            // control socket — the worker is done. EOF is the normal
+            // exit, so this is not an error.
+            Err(_) => return Ok(()),
+        };
+        let response = match op {
+            HostMessage::WorkerSyscallBegin(args) => {
+                let id = next_async;
+                next_async += 1;
+                // Run the syscall on a background thread in THIS (worker)
+                // process — it carries the worker's credentials — and reply
+                // with the handle now. The thread's result is collected on
+                // the matching await.
+                let jh = std::thread::spawn(move || match ops::syscall::syscall(args.args) {
+                    AgentMessage::SyscallResult(p) => AgentMessage::WorkerSyscallAwaitResult(p),
+                    other => other,
+                });
+                pending.insert(id, jh);
+                AgentMessage::WorkerSyscallBeginResult(provium_protocol::wire::OpResult::Ok(id))
+            }
+            HostMessage::WorkerSyscallAwait(args) => match pending.remove(&args.async_id) {
+                Some(jh) => jh.join().unwrap_or_else(|_| {
+                    AgentMessage::AgentError(provium_protocol::wire::AgentError {
+                        kind: provium_protocol::wire::AgentErrorKind::BadRequest,
+                        message: "worker async syscall thread panicked".into(),
+                    })
+                }),
+                None => AgentMessage::AgentError(provium_protocol::wire::AgentError {
+                    kind: provium_protocol::wire::AgentErrorKind::UnknownHandle,
+                    message: format!("worker_syscall_await: unknown async handle {}", args.async_id),
+                }),
+            },
+            other => dispatch_short(other, &state),
+        };
+        write_agent_message(&mut writer, &response)?;
+    }
+}
+
 fn dispatch<R, W>(
     op: HostMessage,
     reader: &mut R,
@@ -167,12 +247,15 @@ fn dispatch_short(op: HostMessage, state: &Arc<AgentState>) -> AgentMessage {
         HostMessage::SleepClock(args) => ops::clock::sleep_clock(args),
         HostMessage::AdvanceClock(args) => ops::clock::advance_clock(args),
         HostMessage::Syscall(args) => ops::syscall::syscall(args),
+        HostMessage::ReadMem(args) => ops::read_mem::read_mem(args),
         HostMessage::SpawnWorker(args) => ops::worker::spawn(args, state),
         HostMessage::WorkerExec(args) => ops::worker::worker_exec(args, state),
         HostMessage::WorkerJoin(args) => ops::worker::worker_join(args, state),
         HostMessage::WorkerRunAsync(args) => ops::worker::worker_run_async(args, state),
         HostMessage::WorkerOpenFile(args) => ops::worker::worker_open_file(args, state),
         HostMessage::WorkerSyscall(args) => ops::worker::worker_syscall(args, state),
+        HostMessage::WorkerSyscallBegin(args) => ops::worker::worker_syscall_begin(args, state),
+        HostMessage::WorkerSyscallAwait(args) => ops::worker::worker_syscall_await(args, state),
         HostMessage::WorkerKill(args) => ops::worker::worker_kill(args, state),
         HostMessage::Listdir(args) => ops::file::listdir(args),
         HostMessage::Mkdir(args) => ops::file::mkdir(args),
@@ -263,6 +346,7 @@ fn describe_handshake_violation(message: &HostMessage) -> &'static str {
         HostMessage::SleepClock(_) => "received `sleep_clock` before handshake",
         HostMessage::AdvanceClock(_) => "received `advance_clock` before handshake",
         HostMessage::Syscall(_) => "received `syscall` before handshake",
+        HostMessage::ReadMem(_) => "received `read_mem` before handshake",
         HostMessage::SpawnWorker(_) => "received `spawn_worker` before handshake",
         HostMessage::WorkerExec(_) => "received `worker_exec` before handshake",
         HostMessage::WorkerJoin(_) => "received `worker_join` before handshake",
@@ -280,6 +364,8 @@ fn describe_handshake_violation(message: &HostMessage) -> &'static str {
         HostMessage::WorkerRunAsync(_) => "received `worker_run_async` before handshake",
         HostMessage::WorkerOpenFile(_) => "received `worker_open_file` before handshake",
         HostMessage::WorkerSyscall(_) => "received `worker_syscall` before handshake",
+        HostMessage::WorkerSyscallBegin(_) => "received `worker_syscall_begin` before handshake",
+        HostMessage::WorkerSyscallAwait(_) => "received `worker_syscall_await` before handshake",
         HostMessage::WorkerKill(_) => "received `worker_kill` before handshake",
         HostMessage::BatchExec(_) => "received `batch_exec` before handshake",
         HostMessage::BatchOp(_) => "received `batch_op` before handshake",

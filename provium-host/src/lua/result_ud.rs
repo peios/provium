@@ -1044,6 +1044,72 @@ impl UserData for WorkerUd {
             table.set("out_bufs", outs)?;
             Ok(table)
         });
+        // worker:syscall_async(nr, ...) — same call forms as worker:syscall,
+        // but returns a handle immediately; the worker runs the syscall on a
+        // background thread so the host can serve a source (or drive other
+        // workers) while it blocks. Collect with handle:await().
+        methods.add_method("syscall_async", |_, this, args: mlua::Variadic<Value>| {
+            let nr_v = args.first().cloned().ok_or_else(|| {
+                mlua::Error::external("worker:syscall_async(nr, ...): missing nr")
+            })?;
+            let nr = match nr_v {
+                Value::Integer(n) => n,
+                Value::Number(n) => n as i64,
+                _ => return Err(mlua::Error::external("worker:syscall_async: nr must be integer")),
+            };
+            let mut filled = [0i64; 6];
+            let mut bufs: Vec<Vec<u8>> = Vec::new();
+            let mut ptrs: Vec<u8> = Vec::new();
+            let mut nested: Vec<provium_protocol::wire::NestedPtr> = Vec::new();
+            if let Some(Value::Table(t)) = args.get(1).cloned() {
+                if let Ok(arg_tbl) = t.get::<mlua::Table>("args") {
+                    for (i, slot) in filled.iter_mut().enumerate() {
+                        if let Some(v) = arg_tbl.get::<i64>((i + 1) as i64).ok() {
+                            *slot = v;
+                        }
+                    }
+                }
+                if let Ok(buf_tbl) = t.get::<mlua::Table>("bufs") {
+                    for pair in buf_tbl.sequence_values::<mlua::String>() {
+                        bufs.push(pair?.as_bytes().to_vec());
+                    }
+                }
+                if let Ok(ptr_tbl) = t.get::<mlua::Table>("ptrs") {
+                    for pair in ptr_tbl.sequence_values::<u8>() {
+                        ptrs.push(pair?);
+                    }
+                }
+                if let Ok(nested_tbl) = t.get::<mlua::Table>("nested") {
+                    for entry in nested_tbl.sequence_values::<mlua::Table>() {
+                        let e = entry?;
+                        let parent: i64 = e.get("parent")?;
+                        let child: i64 = e.get("child")?;
+                        let offset: u32 = e.get("offset")?;
+                        nested.push(provium_protocol::wire::NestedPtr {
+                            parent: (parent - 1).max(0) as u8,
+                            child: (child - 1).max(0) as u8,
+                            offset,
+                        });
+                    }
+                }
+            } else {
+                for (i, v) in args.iter().skip(1).enumerate() {
+                    if i >= 6 {
+                        break;
+                    }
+                    filled[i] = match v {
+                        Value::Integer(n) => *n,
+                        Value::Number(n) => *n as i64,
+                        _ => 0,
+                    };
+                }
+            }
+            let pending = this
+                .worker
+                .begin_syscall_with_bufs(nr, filled, bufs, ptrs, nested)
+                .map_err(mlua::Error::external)?;
+            Ok(crate::lua::vm_ud::PendingWorkerSyscallUd::new(pending))
+        });
         methods.add_method("kill", |_, this, sig: Option<Value>| {
             // Broadcast a signal to every async process in this
             // worker's namespace. Mirrors proc:kill — the
