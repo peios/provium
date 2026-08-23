@@ -559,6 +559,14 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
     cmd.args([
         "-M",
         "q35,accel=kvm,memory-backend=mem",
+        // QEMU's default model (qemu64) advertises neither SSE4.2 nor POPCNT,
+        // putting it BELOW x86-64-v2 — the baseline Peios' toolchain targets
+        // (gcc --with-arch=x86-64-v2), so a Peios guest aborts at startup with
+        // "CPU does not support x86-64-v2". KVM acceleration on its own does
+        // not expose host features; an explicit -cpu is required. `host` is
+        // correct here because this path is unconditionally accel=kvm.
+        "-cpu",
+        "host",
         "-m",
         &mem,
         "-smp",
@@ -722,6 +730,14 @@ pub fn build_interactive_qemu_command(plan: &InteractiveLaunchPlan<'_>) -> Comma
     cmd.args([
         "-M",
         "q35,accel=kvm,memory-backend=mem",
+        // QEMU's default model (qemu64) advertises neither SSE4.2 nor POPCNT,
+        // putting it BELOW x86-64-v2 — the baseline Peios' toolchain targets
+        // (gcc --with-arch=x86-64-v2), so a Peios guest aborts at startup with
+        // "CPU does not support x86-64-v2". KVM acceleration on its own does
+        // not expose host features; an explicit -cpu is required. `host` is
+        // correct here because this path is unconditionally accel=kvm.
+        "-cpu",
+        "host",
         "-m",
         &mem,
         "-smp",
@@ -1185,6 +1201,11 @@ mod tests {
         let cmd = build_qemu_command(&plan);
         let args = collect_args(&cmd);
         assert_eq!(arg_after(&args, "-M").as_deref(), Some("q35,accel=kvm,memory-backend=mem"));
+        // Guest CPU model is not optional. QEMU's default (qemu64) is below
+        // x86-64-v2, which the Peios toolchain targets, so omitting -cpu
+        // makes every Peios guest abort at startup rather than fail visibly
+        // here. Assert it explicitly so the flag cannot be dropped silently.
+        assert_eq!(arg_after(&args, "-cpu").as_deref(), Some("host"));
     }
 
     #[test]
