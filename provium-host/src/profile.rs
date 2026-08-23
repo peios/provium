@@ -443,11 +443,11 @@ guest_os = "linux"
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("cmdline");
         // Multi-line / extra whitespace must collapse to single spaces.
-        fs::write(&file, "console=ttyS0 loglevel=7\n  init=/usr/bin/protoinit \n").unwrap();
+        fs::write(&file, "console=ttyS0 loglevel=7\n  init=/bin/protoinit \n").unwrap();
         let p = profile_with("", Some(file));
         assert_eq!(
             p.resolve_cmdline().unwrap(),
-            "console=ttyS0 loglevel=7 init=/usr/bin/protoinit"
+            "console=ttyS0 loglevel=7 init=/bin/protoinit"
         );
     }
 
@@ -455,13 +455,13 @@ guest_os = "linux"
     fn resolve_cmdline_composes_file_then_inline() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("cmdline");
-        fs::write(&file, "console=ttyS0 init=/usr/bin/protoinit").unwrap();
+        fs::write(&file, "console=ttyS0 init=/bin/protoinit").unwrap();
         // Inline appended after the file: inline wins for last-wins
         // params (here a second console + an override of init=).
         let p = profile_with("console=hvc0 init=/sbin/other", Some(file));
         assert_eq!(
             p.resolve_cmdline().unwrap(),
-            "console=ttyS0 init=/usr/bin/protoinit console=hvc0 init=/sbin/other"
+            "console=ttyS0 init=/bin/protoinit console=hvc0 init=/sbin/other"
         );
     }
 
@@ -498,7 +498,7 @@ cmdline_file = "../peiso/out/root/boot/cmdline"
 [profiles.peios]
 build        = "peiso build manifests/peios.toml --out {out}"
 build_out    = "/custom/build/peios"
-kernel       = "{out}/root/boot/vmlinuz"
+kernel       = "{out}/root/usr/lib/modules/7.0.9-peios/vmlinuz-7.0.9-peios"
 initrd       = "{out}/initrd.img"
 cmdline_file = "{out}/root/boot/cmdline"
 "#;
@@ -511,7 +511,7 @@ cmdline_file = "{out}/root/boot/cmdline"
         );
         assert_eq!(
             p.kernel,
-            PathBuf::from("/custom/build/peios/root/boot/vmlinuz")
+            PathBuf::from("/custom/build/peios/root/usr/lib/modules/7.0.9-peios/vmlinuz-7.0.9-peios")
         );
         assert_eq!(p.initrd, PathBuf::from("/custom/build/peios/initrd.img"));
         assert_eq!(
@@ -551,7 +551,7 @@ cmdline_file = "{out}/cmdline"
     fn expand_build_outputs_noop_without_out_token() {
         let raw = r#"
 [profiles.peios]
-kernel  = "../peiso/out/root/boot/vmlinuz"
+kernel  = "../peiso/out/root/usr/lib/modules/7.0.9-peios/vmlinuz-7.0.9-peios"
 initrd  = "../peiso/out/initrd.img"
 cmdline = "console=ttyS0"
 "#;
@@ -559,7 +559,7 @@ cmdline = "console=ttyS0"
         cfg.expand_build_outputs();
         let p = cfg.profile("peios").unwrap();
         // A static profile is untouched.
-        assert_eq!(p.kernel, PathBuf::from("../peiso/out/root/boot/vmlinuz"));
+        assert_eq!(p.kernel, PathBuf::from("../peiso/out/root/usr/lib/modules/7.0.9-peios/vmlinuz-7.0.9-peios"));
         assert_eq!(p.cmdline, "console=ttyS0");
         assert!(p.build.is_none());
     }
