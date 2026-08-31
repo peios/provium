@@ -26,14 +26,14 @@ fn slice2_config() -> Arc<Config> {
         "peios".into(),
         Profile {
             kernel: "/unused".into(),
-            initrd: "/unused".into(),
+            initrd: "/unused".into(), root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
             agent_overlay_path: None,
             cmdline_file: None,
             build: None,
-            build_out: None,
+            build_out: None, dir: None,
         },
     );
     Arc::new(Config {

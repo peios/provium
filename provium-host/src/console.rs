@@ -73,16 +73,22 @@ pub fn run(
     })?;
 
     // Fail with a clean diagnostic rather than an opaque QEMU exit if
-    // the profile points at a kernel/initrd that isn't there.
-    if !profile.kernel.exists() {
+    // the profile points at a kernel/initrd that isn't there. The
+    // kernel may be named outright or found inside a composed root.
+    let kernel = profile
+        .resolve_kernel()
+        .map_err(|e| format!("profile `{}`: {e}", opts.profile_name))?;
+    if !kernel.exists() {
         return Err(format!(
             "profile `{}`: kernel `{}` does not exist",
             opts.profile_name,
-            profile.kernel.display(),
+            kernel.display(),
         )
         .into());
     }
-    if !profile.initrd.exists() {
+    // An empty initrd means the agent overlay is the whole initramfs;
+    // there is no user file to check.
+    if !profile.initrd.as_os_str().is_empty() && !profile.initrd.exists() {
         return Err(format!(
             "profile `{}`: initrd `{}` does not exist",
             opts.profile_name,
@@ -112,6 +118,14 @@ pub fn run(
         let cid = crate::cid::CidAllocator::new().allocate();
         (prepared.initrd_path, prepared.cmdline, Some(cid))
     } else {
+        if profile.initrd.as_os_str().is_empty() {
+            return Err(format!(
+                "profile `{}` names no initrd, which means the agent overlay is \
+                 the initramfs; pass --inject-agent, or set `initrd`",
+                opts.profile_name,
+            )
+            .into());
+        }
         (profile.initrd.clone(), cmdline, None)
     };
 
@@ -122,7 +136,7 @@ pub fn run(
 
     let plan = InteractiveLaunchPlan {
         qemu_binary: &qemu_binary,
-        kernel: &profile.kernel,
+        kernel: &kernel,
         initrd: &initrd_path,
         cmdline: &cmdline,
         memory_bytes,

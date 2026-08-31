@@ -13,6 +13,22 @@
 //! guest_os = "peios"             # optional, defaults "peios"
 //! ```
 //!
+//! Profiles may also be discovered from a directory instead of being
+//! written inline, which is what a repository holding many testsets
+//! wants — one directory per testset, self-contained:
+//!
+//! ```toml
+//! [profiles]
+//! from_dir = "profiles"          # each subdir with a
+//!                                # profile.provium.toml is a profile,
+//!                                # named after the directory
+//! ```
+//!
+//! A discovered profile's relative paths resolve against its own
+//! directory, and its `build` runs there, so the directory can be moved
+//! or copied without rewriting what is inside it. Inline profiles keep
+//! resolving against provium's cwd, as they always have.
+//!
 //! `[profiles.<name>]` is what the VMM reads to spawn a VM.
 //! Path validation (does the kernel actually exist?) happens at
 //! VM-boot time rather than config-load time so a `provium.toml` can
@@ -26,7 +42,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Top-level `provium.toml` shape.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+///
+/// Built by [`Config::from_toml_str`] rather than deserialized
+/// directly: profile discovery needs the directory the config was read
+/// from, which serde has no way to know. By the time a `Config` exists,
+/// `profiles` holds the inline and the discovered profiles alike and
+/// nothing downstream can tell which was which.
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Config {
     /// `[provium]` section — global runner settings. Most fields are
     /// only consumed by the slice-2 test runner / fixture cache;
@@ -36,9 +58,31 @@ pub struct Config {
     pub provium: ProviumSection,
 
     /// `[profiles.<name>]` — at least one is required for any
-    /// non-trivial run.
+    /// non-trivial run. Includes anything found via
+    /// `[profiles] from_dir`.
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
+}
+
+/// `provium.toml` as written, before profile discovery.
+#[derive(Deserialize)]
+struct RawConfig {
+    #[serde(default)]
+    provium: ProviumSection,
+    #[serde(default)]
+    profiles: RawProfiles,
+}
+
+/// The `[profiles]` table: a directory to discover profiles in, plus
+/// any written inline beside it. Both may appear; a discovered profile
+/// whose name collides with an inline one is an error rather than a
+/// silent winner.
+#[derive(Default, Deserialize)]
+struct RawProfiles {
+    #[serde(default)]
+    from_dir: Option<PathBuf>,
+    #[serde(flatten)]
+    inline: BTreeMap<String, Profile>,
 }
 
 /// `[provium]` section.
@@ -63,12 +107,28 @@ pub struct ProviumSection {
 /// One named `[profiles.<name>]` entry.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Profile {
-    /// Kernel image. Direct-boot via QEMU's `-kernel`.
+    /// Kernel image. Direct-boot via QEMU's `-kernel`. May be omitted
+    /// when `root` is set, in which case the kernel is found inside the
+    /// root — see [`Profile::resolve_kernel`].
+    #[serde(default)]
     pub kernel: PathBuf,
     /// Initramfs image. By default the agent-overlay is concatenated
     /// onto this at launch — set `inject_agent = false` to use it
     /// as-is (e.g. when the initrd already contains the agent).
+    ///
+    /// May be omitted, which means the VM has no userspace of its own:
+    /// the agent overlay becomes the whole initramfs and the agent
+    /// comes up as PID 1. That is the shape a kernel conformance
+    /// testset wants, and omitting the field is how it says so without
+    /// vendoring an initrd it would never otherwise need.
+    #[serde(default)]
     pub initrd: PathBuf,
+    /// A composed Peios root — what `peiso root` writes. Set this
+    /// instead of `kernel` to let provium find the kernel inside it,
+    /// so a profile whose build composes a root does not also have to
+    /// know where in that root a kernel lands.
+    #[serde(default)]
+    pub root: Option<PathBuf>,
     /// Inline kernel command line. May be empty (or omitted) when
     /// `cmdline_file` is set — the two compose, file first with this
     /// appended after. Boot opts can override the whole thing per-VM.
@@ -123,6 +183,14 @@ pub struct Profile {
     /// never wipes it — the `build` command owns its contents.
     #[serde(default)]
     pub build_out: Option<PathBuf>,
+    /// The directory this profile was discovered in, for a profile
+    /// found via `[profiles] from_dir`. Its relative paths have already
+    /// been resolved against it by the time anything reads them; this
+    /// is retained because the `build` command runs here rather than in
+    /// provium's cwd. `None` for a profile written inline, whose
+    /// paths and build belong to provium's cwd.
+    #[serde(skip)]
+    pub dir: Option<PathBuf>,
 }
 
 fn default_guest_os() -> String {
@@ -179,6 +247,88 @@ impl Profile {
         Ok(parts.join(" "))
     }
 
+    /// The kernel to boot: `kernel` when set, otherwise the one inside
+    /// `root`.
+    ///
+    /// A composed Peios root carries its kernel beside its modules, at
+    /// `usr/lib/modules/<release>/vmlinuz-<release>` — the same place
+    /// peiso itself looks when it builds a medium. Resolving it here
+    /// rather than in each profile spares every testset the same
+    /// symlink incantation, and means a kernel version bump moves
+    /// nothing in any config.
+    ///
+    /// Deliberately lazy: a profile's `build` composes the root, so
+    /// this is called at boot time, after the build has run. Two
+    /// kernels in one root is an error rather than a choice made
+    /// silently — a conformance result that does not say which kernel
+    /// produced it is not a result.
+    pub fn resolve_kernel(&self) -> Result<PathBuf, KernelError> {
+        if !self.kernel.as_os_str().is_empty() {
+            return Ok(self.kernel.clone());
+        }
+        let Some(root) = &self.root else {
+            return Err(KernelError::NoSource);
+        };
+        let modules = root.join("usr/lib/modules");
+        let mut found: Vec<PathBuf> = Vec::new();
+        let entries = fs::read_dir(&modules).map_err(|source| KernelError::Read {
+            path: modules.clone(),
+            source,
+        })?;
+        for entry in entries.flatten() {
+            let release = entry.path();
+            let Ok(inner) = fs::read_dir(&release) else {
+                continue;
+            };
+            for file in inner.flatten() {
+                let name = file.file_name();
+                if name.to_string_lossy().starts_with("vmlinuz-") {
+                    found.push(file.path());
+                }
+            }
+        }
+        found.sort();
+        match found.len() {
+            0 => Err(KernelError::NotFound { root: root.clone() }),
+            1 => Ok(found.remove(0)),
+            _ => Err(KernelError::Ambiguous {
+                root: root.clone(),
+                found,
+            }),
+        }
+    }
+
+    /// Resolve this profile's relative paths against `dir`.
+    ///
+    /// Called once, when the profile is discovered. `{out}` is not
+    /// expanded yet, so a path that starts with the token is left
+    /// alone: it names a place in the build output directory, which is
+    /// absolute already and has nothing to do with where the profile
+    /// happens to live.
+    fn rebase(&mut self, dir: &Path) {
+        let fix = |p: &Path| -> PathBuf {
+            if p.as_os_str().is_empty()
+                || p.is_absolute()
+                || p.to_string_lossy().starts_with("{out}")
+            {
+                p.to_path_buf()
+            } else {
+                dir.join(p)
+            }
+        };
+        self.kernel = fix(&self.kernel);
+        self.initrd = fix(&self.initrd);
+        self.root = self.root.as_deref().map(fix);
+        self.cmdline_file = self.cmdline_file.as_deref().map(fix);
+        self.agent_overlay_path = self.agent_overlay_path.as_deref().map(fix);
+    }
+
+    /// The directory a profile's `build` command runs in: its own
+    /// directory when it was discovered, else provium's cwd.
+    pub fn build_dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
+
     /// The resolved `{out}` build-output directory for this profile.
     /// `build_out` when set, else `<default_build_base>/<profile_name>`.
     pub fn out_dir(&self, profile_name: &str) -> PathBuf {
@@ -186,6 +336,100 @@ impl Profile {
             .clone()
             .unwrap_or_else(|| default_build_base().join(profile_name))
     }
+}
+
+/// The file that makes a directory a profile.
+const PROFILE_FILE: &str = "profile.provium.toml";
+
+/// Read every profile under `dir`.
+///
+/// A subdirectory holding a [`PROFILE_FILE`] is a profile, named after
+/// the directory; a subdirectory without one is not, and is skipped
+/// rather than rejected, so a profile directory may keep whatever else
+/// it needs beside its config. Ordering is by name, so a run is the
+/// same whatever order the filesystem hands entries back in.
+///
+/// Everything relative inside a discovered profile resolves against
+/// that profile's own directory rather than provium's cwd — the paths
+/// it names, and the directory its `build` runs in. That is what makes
+/// a testset one self-contained directory: it can be moved, copied or
+/// renamed and still mean what it says.
+fn discover_profiles(
+    dir: &Path,
+    config_path: &Path,
+) -> Result<Vec<(String, Profile)>, ConfigError> {
+    let entries = fs::read_dir(dir).map_err(|source| ConfigError::Io {
+        path: dir.into(),
+        source,
+    })?;
+    let mut found: Vec<(String, Profile)> = Vec::new();
+    for entry in entries.flatten() {
+        let profile_dir = entry.path();
+        let file = profile_dir.join(PROFILE_FILE);
+        if !file.is_file() {
+            continue;
+        }
+        let Some(name) = profile_dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let raw = fs::read_to_string(&file).map_err(|source| ConfigError::Io {
+            path: file.clone(),
+            source,
+        })?;
+        let mut profile: Profile = toml::from_str(&raw).map_err(|source| ConfigError::Parse {
+            path: file.clone(),
+            source,
+        })?;
+        profile.dir = Some(profile_dir.clone());
+        profile.rebase(&profile_dir);
+        found.push((name, profile));
+    }
+    if found.is_empty() {
+        return Err(ConfigError::Validation {
+            path: config_path.into(),
+            message: format!(
+                "`{}` holds no profile: a profile is a directory containing a {PROFILE_FILE}",
+                dir.display()
+            ),
+        });
+    }
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(found)
+}
+
+/// Why [`Profile::resolve_kernel`] could not name a kernel.
+#[derive(Debug, Error)]
+pub enum KernelError {
+    /// The profile sets neither `kernel` nor `root`.
+    #[error("profile sets neither `kernel` nor `root`, so there is no kernel to boot")]
+    NoSource,
+
+    /// The root's modules directory could not be read — usually
+    /// because the build did not produce the root it promised.
+    #[error("read `{path}`: {source}")]
+    Read {
+        /// Directory whose read failed.
+        path: PathBuf,
+        /// Underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// The root exists but holds no kernel.
+    #[error("no kernel at usr/lib/modules/<release>/vmlinuz-* in root `{root}`")]
+    NotFound {
+        /// The root that was searched.
+        root: PathBuf,
+    },
+
+    /// More than one kernel: the profile must say which.
+    #[error("root `{root}` holds {} kernels ({}); set `kernel` to choose one", found.len(), found.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))]
+    Ambiguous {
+        /// The root that was searched.
+        root: PathBuf,
+        /// Every kernel found in it.
+        found: Vec<PathBuf>,
+    },
 }
 
 /// Errors raised by [`Config::load`].
@@ -233,13 +477,40 @@ impl Config {
         Self::from_toml_str(&raw, path)
     }
 
-    /// Parse + validate a config from in-memory TOML. The `path` is
-    /// used purely for error messages.
+    /// Parse + validate a config from in-memory TOML. `path` names the
+    /// config's own location: it is used for error messages, and — when
+    /// `[profiles] from_dir` is set — as the directory discovery
+    /// resolves against. A config with no `from_dir` never touches the
+    /// filesystem here.
     pub fn from_toml_str(raw: &str, path: &Path) -> Result<Self, ConfigError> {
-        let config: Config = toml::from_str(raw).map_err(|e| ConfigError::Parse {
+        let raw: RawConfig = toml::from_str(raw).map_err(|e| ConfigError::Parse {
             path: path.into(),
             source: e,
         })?;
+        let base = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut config = Config {
+            provium: raw.provium,
+            profiles: raw.profiles.inline,
+        };
+        if let Some(from_dir) = &raw.profiles.from_dir {
+            let dir = if from_dir.is_absolute() {
+                from_dir.clone()
+            } else {
+                base.join(from_dir)
+            };
+            for (name, profile) in discover_profiles(&dir, path)? {
+                if config.profiles.contains_key(&name) {
+                    return Err(ConfigError::Validation {
+                        path: path.into(),
+                        message: format!(
+                            "profile `{name}` is both written inline and discovered                              in `{}`; rename one",
+                            dir.display()
+                        ),
+                    });
+                }
+                config.profiles.insert(name, profile);
+            }
+        }
         config.validate(path)?;
         Ok(config)
     }
@@ -263,6 +534,10 @@ impl Config {
 
             let new_build = profile.build.as_deref().map(&sub);
             let new_kernel = PathBuf::from(sub(&profile.kernel.to_string_lossy()));
+            let new_root = profile
+                .root
+                .as_deref()
+                .map(|r| PathBuf::from(sub(&r.to_string_lossy())));
             let new_initrd = PathBuf::from(sub(&profile.initrd.to_string_lossy()));
             let new_cmdline = sub(&profile.cmdline);
             let new_cmdline_file = profile
@@ -276,6 +551,7 @@ impl Config {
 
             profile.build = new_build;
             profile.kernel = new_kernel;
+            profile.root = new_root;
             profile.initrd = new_initrd;
             profile.cmdline = new_cmdline;
             profile.cmdline_file = new_cmdline_file;
@@ -422,6 +698,7 @@ guest_os = "linux"
         Profile {
             kernel: PathBuf::from("/k"),
             initrd: PathBuf::from("/i"),
+            root: None,
             cmdline: cmdline.to_string(),
             cmdline_file,
             guest_os: "peios".into(),
@@ -429,6 +706,7 @@ guest_os = "linux"
             agent_overlay_path: None,
             build: None,
             build_out: None,
+            dir: None,
         }
     }
 
@@ -577,6 +855,186 @@ initrd = "/i"
                 assert!(message.contains("cmdline"), "got: {message}");
             }
             other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    // -- Profile discovery ------------------------------------------------
+
+    /// A `provium.toml` at `<tmp>/provium.toml` plus a profiles dir.
+    fn discovery_tree() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let profiles = tmp.path().join("profiles");
+        for name in ["kernel-only", "full"] {
+            std::fs::create_dir_all(profiles.join(name)).unwrap();
+            std::fs::write(
+                profiles.join(name).join(PROFILE_FILE),
+                format!("build = \"echo {name}\"\nroot = \"{{out}}/root\"\ncmdline = \"console=hvc0\"\n"),
+            )
+            .unwrap();
+        }
+        // A directory that is not a profile: skipped, not rejected.
+        std::fs::create_dir_all(profiles.join("shared-lua")).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn profiles_are_discovered_from_a_directory() {
+        let tmp = discovery_tree();
+        let cfg = Config::from_toml_str(
+            "[provium]\nroots = [\"tests\"]\n\n[profiles]\nfrom_dir = \"profiles\"\n",
+            &tmp.path().join("provium.toml"),
+        )
+        .expect("discovery");
+        let names: Vec<&str> = cfg.profiles.keys().map(String::as_str).collect();
+        assert_eq!(names, vec!["full", "kernel-only"], "named after their dirs");
+        let ko = cfg.profile("kernel-only").unwrap();
+        assert_eq!(ko.build.as_deref(), Some("echo kernel-only"));
+        assert_eq!(ko.dir.as_deref(), Some(tmp.path().join("profiles/kernel-only").as_path()));
+    }
+
+    #[test]
+    fn discovered_profiles_may_sit_beside_inline_ones() {
+        let tmp = discovery_tree();
+        let cfg = Config::from_toml_str(
+            "[profiles]\nfrom_dir = \"profiles\"\n\n[profiles.inline]\n\
+             kernel = \"/k\"\ninitrd = \"/i\"\ncmdline = \"console=hvc0\"\n",
+            &tmp.path().join("provium.toml"),
+        )
+        .expect("both shapes");
+        assert_eq!(cfg.profiles.len(), 3);
+        // An inline profile keeps resolving against provium's cwd.
+        assert!(cfg.profile("inline").unwrap().dir.is_none());
+    }
+
+    #[test]
+    fn a_name_cannot_be_both_inline_and_discovered() {
+        let tmp = discovery_tree();
+        let err = Config::from_toml_str(
+            "[profiles]\nfrom_dir = \"profiles\"\n\n[profiles.full]\n\
+             kernel = \"/k\"\ninitrd = \"/i\"\ncmdline = \"console=hvc0\"\n",
+            &tmp.path().join("provium.toml"),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("both written inline and discovered"),
+            "{err}"
+        );
+    }
+
+    /// The rule that makes a profile directory movable: what it names
+    /// is relative to itself, not to wherever provium was run.
+    #[test]
+    fn discovered_paths_resolve_against_the_profile_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("profiles").join("vendored");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(PROFILE_FILE),
+            "kernel = \"boot/vmlinuz\"\ninitrd = \"boot/initrd.cpio.gz\"\n\
+             cmdline_file = \"cmdline\"\ncmdline = \"console=hvc0\"\n",
+        )
+        .unwrap();
+        let cfg = Config::from_toml_str(
+            "[profiles]\nfrom_dir = \"profiles\"\n",
+            &tmp.path().join("provium.toml"),
+        )
+        .unwrap();
+        let p = cfg.profile("vendored").unwrap();
+        assert_eq!(p.kernel, dir.join("boot/vmlinuz"));
+        assert_eq!(p.initrd, dir.join("boot/initrd.cpio.gz"));
+        assert_eq!(p.cmdline_file.as_deref(), Some(dir.join("cmdline").as_path()));
+    }
+
+    /// `{out}` is an absolute build directory, so it must survive
+    /// rebasing untouched and still expand afterwards.
+    #[test]
+    fn out_token_survives_rebasing() {
+        let tmp = discovery_tree();
+        let mut cfg = Config::from_toml_str(
+            "[profiles]\nfrom_dir = \"profiles\"\n",
+            &tmp.path().join("provium.toml"),
+        )
+        .unwrap();
+        cfg.expand_build_outputs();
+        let root = cfg.profile("kernel-only").unwrap().root.clone().unwrap();
+        assert!(root.is_absolute(), "{}", root.display());
+        assert!(!root.to_string_lossy().contains("{out}"), "{}", root.display());
+        assert!(root.ends_with("kernel-only/root"), "{}", root.display());
+    }
+
+    #[test]
+    fn a_from_dir_with_no_profiles_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("profiles").join("notaprofile")).unwrap();
+        let err = Config::from_toml_str(
+            "[profiles]\nfrom_dir = \"profiles\"\n",
+            &tmp.path().join("provium.toml"),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("holds no profile"), "{err}");
+    }
+
+    // -- Kernel discovery -------------------------------------------------
+
+    fn kernel_profile(kernel: &str, root: Option<PathBuf>) -> Profile {
+        let mut p = profile_with("console=hvc0", None);
+        p.kernel = PathBuf::from(kernel);
+        p.root = root;
+        p
+    }
+
+    /// Lay out a composed root the way peiso writes one.
+    fn composed_root(releases: &[&str]) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        for release in releases {
+            let dir = tmp.path().join("usr/lib/modules").join(release);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("vmlinuz-{release}")), b"kernel").unwrap();
+        }
+        tmp
+    }
+
+    #[test]
+    fn an_explicit_kernel_wins_over_a_root() {
+        let root = composed_root(&["7.0.9-peios"]);
+        let p = kernel_profile("/explicit/vmlinuz", Some(root.path().to_path_buf()));
+        assert_eq!(p.resolve_kernel().unwrap(), PathBuf::from("/explicit/vmlinuz"));
+    }
+
+    #[test]
+    fn a_kernel_is_found_inside_a_composed_root() {
+        let root = composed_root(&["7.0.9-peios-0.20.1-rc12"]);
+        let p = kernel_profile("", Some(root.path().to_path_buf()));
+        assert_eq!(
+            p.resolve_kernel().unwrap(),
+            root.path()
+                .join("usr/lib/modules/7.0.9-peios-0.20.1-rc12/vmlinuz-7.0.9-peios-0.20.1-rc12"),
+        );
+    }
+
+    #[test]
+    fn neither_kernel_nor_root_is_an_error() {
+        let p = kernel_profile("", None);
+        assert!(matches!(p.resolve_kernel(), Err(KernelError::NoSource)));
+    }
+
+    #[test]
+    fn a_root_with_no_kernel_is_an_error() {
+        let root = composed_root(&[]);
+        std::fs::create_dir_all(root.path().join("usr/lib/modules")).unwrap();
+        let p = kernel_profile("", Some(root.path().to_path_buf()));
+        assert!(matches!(p.resolve_kernel(), Err(KernelError::NotFound { .. })));
+    }
+
+    /// Picking one of two silently would make a conformance result
+    /// unattributable, so it is refused instead.
+    #[test]
+    fn two_kernels_in_one_root_is_an_error() {
+        let root = composed_root(&["7.0.9-peios", "7.0.10-peios"]);
+        let p = kernel_profile("", Some(root.path().to_path_buf()));
+        match p.resolve_kernel() {
+            Err(KernelError::Ambiguous { found, .. }) => assert_eq!(found.len(), 2),
+            other => panic!("expected Ambiguous, got {other:?}"),
         }
     }
 }

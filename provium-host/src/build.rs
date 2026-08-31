@@ -66,6 +66,10 @@ pub enum BuildError {
 /// `profile` must already be `{out}`-expanded. The profile's
 /// [`Profile::out_dir`] is created first so the command's `--out` has
 /// somewhere to write; provium never wipes it.
+///
+/// A discovered profile's command runs in that profile's own directory
+/// (see [`Profile::build_dir`]), so what it names beside itself is what
+/// it gets. An inline profile's runs in provium's cwd, as before.
 pub fn run_build(profile_name: &str, profile: &Profile) -> Result<(), BuildError> {
     let Some(cmd) = profile.build.as_deref() else {
         return Ok(());
@@ -83,9 +87,12 @@ pub fn run_build(profile_name: &str, profile: &Profile) -> Result<(), BuildError
         out.display()
     );
 
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(cmd);
+    if let Some(dir) = profile.build_dir() {
+        command.current_dir(dir);
+    }
+    let status = command
         .status()
         .map_err(|e| BuildError::Spawn {
             profile: profile_name.to_string(),
@@ -124,6 +131,7 @@ mod tests {
         Profile {
             kernel: PathBuf::from("/k"),
             initrd: PathBuf::from("/i"),
+            root: None,
             cmdline: "console=ttyS0".into(),
             cmdline_file: None,
             guest_os: "peios".into(),
@@ -131,6 +139,7 @@ mod tests {
             agent_overlay_path: None,
             build: build.map(str::to_owned),
             build_out,
+            dir: None,
         }
     }
 

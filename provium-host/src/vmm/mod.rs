@@ -104,6 +104,10 @@ pub enum VmmError {
         path: PathBuf,
     },
 
+    /// The profile does not name a kernel that can be found.
+    #[error("kernel: {0}")]
+    KernelSource(#[from] crate::profile::KernelError),
+
     /// Agent-overlay injection failed — the overlay file was not
     /// findable, or the user's cmdline already pinned a conflicting
     /// `rdinit=` value, or the cache write failed.

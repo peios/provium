@@ -1406,6 +1406,7 @@ mod tests {
             Profile {
                 kernel: "/k".into(),
                 initrd: "/i".into(),
+                root: None,
                 cmdline: "console=hvc0".into(),
                 guest_os: "peios".into(),
             inject_agent: true,
@@ -1413,6 +1414,7 @@ mod tests {
             cmdline_file: None,
             build: None,
             build_out: None,
+            dir: None,
             },
         );
         let config = Arc::new(Config {

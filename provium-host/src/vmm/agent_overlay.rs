@@ -123,6 +123,20 @@ pub fn prepare_initrd(
         )
     })?;
 
+    // No user initrd: the overlay is the whole initramfs. It carries
+    // the agent at OVERLAY_AGENT_PATH and no `/init`, so the agent
+    // comes up in standalone mode and performs init's mount duties
+    // itself — which is exactly a VM with no userspace but the agent.
+    // Nothing to concatenate, so nothing to cache either: the overlay
+    // file is handed to QEMU as it stands.
+    if profile.initrd.as_os_str().is_empty() {
+        return Ok(PreparedInitrd {
+            initrd_path: overlay,
+            cmdline: with_rdinit(cmdline),
+            injected: true,
+        });
+    }
+
     let user_bytes = fs::read(&profile.initrd).map_err(|e| {
         VmmError::AgentOverlay(format!(
             "read user initrd `{}`: {e}",
@@ -177,17 +191,23 @@ pub fn prepare_initrd(
         })?;
     }
 
-    let augmented_cmdline = if parse_rdinit(cmdline).is_some() {
-        cmdline.to_owned()
-    } else {
-        format!("{} rdinit={OVERLAY_AGENT_PATH}", cmdline.trim_end())
-    };
+    let augmented_cmdline = with_rdinit(cmdline);
 
     Ok(PreparedInitrd {
         initrd_path: merged_path,
         cmdline: augmented_cmdline,
         injected: true,
     })
+}
+
+/// The cmdline with `rdinit=` pointing at the overlay's agent, unless
+/// it already says so.
+fn with_rdinit(cmdline: &str) -> String {
+    if parse_rdinit(cmdline).is_some() {
+        cmdline.to_owned()
+    } else {
+        format!("{} rdinit={OVERLAY_AGENT_PATH}", cmdline.trim_end())
+    }
 }
 
 /// Extract the `rdinit=PATH` value from a kernel cmdline, if present.
@@ -209,6 +229,7 @@ mod tests {
         Profile {
             kernel: "/k".into(),
             initrd,
+            root: None,
             cmdline: "console=hvc0 quiet".into(),
             guest_os: "peios".into(),
             inject_agent: inject,
@@ -216,6 +237,7 @@ mod tests {
             cmdline_file: None,
             build: None,
             build_out: None,
+            dir: None,
         }
     }
 
@@ -236,6 +258,28 @@ mod tests {
         assert!(!prep.injected);
         assert_eq!(prep.initrd_path, initrd);
         assert_eq!(prep.cmdline, "console=hvc0");
+    }
+
+    /// No user initrd: the overlay is handed to QEMU as it stands,
+    /// with nothing concatenated and nothing cached, and the agent is
+    /// still the thing the kernel execs.
+    #[test]
+    fn no_initrd_boots_the_overlay_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let overlay = dir.path().join("agent-overlay.cpio.gz");
+        std::fs::write(&overlay, b"OVERLAY").unwrap();
+        let mut profile = tmp_profile(PathBuf::new(), true);
+        profile.agent_overlay_path = Some(overlay.clone());
+
+        let prep = prepare_initrd(&profile, "console=hvc0", dir.path()).unwrap();
+        assert!(prep.injected);
+        assert_eq!(prep.initrd_path, overlay, "the overlay itself, not a merge");
+        assert_eq!(prep.cmdline, "console=hvc0 rdinit=/sbin/provium-agent");
+        assert_eq!(
+            std::fs::read(&prep.initrd_path).unwrap(),
+            b"OVERLAY",
+            "nothing was appended to it",
+        );
     }
 
     #[test]
