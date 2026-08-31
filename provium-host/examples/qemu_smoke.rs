@@ -168,6 +168,7 @@ fn build_config(args: &CliArgs) -> Arc<Config> {
         Profile {
             kernel: args.kernel.clone(),
             initrd: args.initrd.clone(),
+            root: None,
             cmdline: args.cmdline.clone(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -175,6 +176,7 @@ fn build_config(args: &CliArgs) -> Arc<Config> {
             cmdline_file: None,
             build: None,
             build_out: None,
+            dir: None,
         },
     );
     Arc::new(Config {

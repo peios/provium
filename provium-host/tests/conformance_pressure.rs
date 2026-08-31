@@ -84,13 +84,14 @@ fn dispatcher_with_pressure_flag_runs_when_unpressured() {
 
     let mut profiles = std::collections::BTreeMap::new();
     profiles.insert("peios".into(), Profile {
-        kernel: "/unused".into(), initrd: "/unused".into(),
+        kernel: "/unused".into(), initrd: "/unused".into(), root: None,
         cmdline: "console=hvc0".into(), guest_os: "peios".into(),
             inject_agent: true,
             agent_overlay_path: None,
             cmdline_file: None,
             build: None,
             build_out: None,
+            dir: None,
     });
     let cfg = Arc::new(Config {
         provium: ProviumSection::default(),

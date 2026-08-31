@@ -217,8 +217,11 @@ impl QemuVmm {
         incoming_snapshot: Option<&std::path::Path>,
     ) -> Result<VmRunning, VmmError> {
         // 1. Validate profile paths up-front so we fail with a clean
-        //    diagnostic instead of QEMU-exit-with-cryptic-stderr.
-        validate_profile_paths(profile)?;
+        //    diagnostic instead of QEMU-exit-with-cryptic-stderr. The
+        //    kernel may come from the profile or from inside a composed
+        //    root, and either way it has to exist before we go further.
+        let kernel = profile.resolve_kernel().map_err(VmmError::KernelSource)?;
+        validate_profile_paths(profile, &kernel)?;
 
         // 1b. Realise host-side networking for any attached bridges.
         //     Best-effort: failures here propagate as VmmError::Io so
@@ -289,7 +292,7 @@ impl QemuVmm {
         let plan = QemuLaunchPlan {
             qemu_binary: &self.config.qemu_binary,
             vm_name: name,
-            kernel: &profile.kernel,
+            kernel: &kernel,
             initrd: &initrd_for_qemu,
             cmdline: &cmdline,
             cid,
@@ -827,14 +830,18 @@ fn path_arg(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
-fn validate_profile_paths(profile: &Profile) -> Result<(), VmmError> {
-    if !profile.kernel.exists() {
+fn validate_profile_paths(profile: &Profile, kernel: &Path) -> Result<(), VmmError> {
+    if !kernel.exists() {
         return Err(VmmError::MissingProfilePath {
             field: "kernel",
-            path: profile.kernel.clone(),
+            path: kernel.to_path_buf(),
         });
     }
-    if !profile.initrd.exists() {
+    // An empty `initrd` is not a missing one: it means the profile
+    // supplies no userspace and the agent overlay is the whole
+    // initramfs. prepare_initrd handles that; there is no user file to
+    // check for.
+    if !profile.initrd.as_os_str().is_empty() && !profile.initrd.exists() {
         return Err(VmmError::MissingProfilePath {
             field: "initrd",
             path: profile.initrd.clone(),
@@ -1407,6 +1414,7 @@ mod tests {
         let profile = Profile {
             kernel: PathBuf::from("/no/such/kernel"),
             initrd: PathBuf::from("/no/such/initrd"),
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -1414,8 +1422,9 @@ mod tests {
             cmdline_file: None,
             build: None,
             build_out: None,
+            dir: None,
         };
-        match validate_profile_paths(&profile) {
+        match validate_profile_paths(&profile, &profile.kernel) {
             Err(VmmError::MissingProfilePath { field: "kernel", .. }) => {}
             other => panic!("expected MissingProfilePath kernel, got {other:?}"),
         }
@@ -1432,6 +1441,7 @@ mod tests {
         let profile = Profile {
             kernel,
             initrd,
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -1439,8 +1449,9 @@ mod tests {
             cmdline_file: None,
             build: None,
             build_out: None,
+            dir: None,
         };
-        validate_profile_paths(&profile).unwrap();
+        validate_profile_paths(&profile, &profile.kernel).unwrap();
     }
 
     #[test]
