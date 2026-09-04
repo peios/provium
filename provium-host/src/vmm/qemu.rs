@@ -246,11 +246,20 @@ impl QemuVmm {
 
         let memory_bytes = opts.memory_bytes.unwrap_or(DEFAULT_MEMORY_BYTES);
         let cpus = opts.cpus.unwrap_or(DEFAULT_CPUS);
-        let raw_cmdline = opts
+        let mut raw_cmdline = opts
             .cmdline_override
             .clone()
             .map(Ok)
             .unwrap_or_else(|| profile.resolve_cmdline())?;
+        // `kernel_cmdline_append`: extra tokens after whichever line won
+        // above. Appending keeps the profile's console/panic/test-hook
+        // tokens intact and lets the appended ones win where they
+        // repeat one (the kernel takes the last occurrence).
+        if let Some(extra) = opts.cmdline_append.as_deref().map(str::trim) {
+            if !extra.is_empty() {
+                raw_cmdline = format!("{} {}", raw_cmdline.trim_end(), extra);
+            }
+        }
 
         // 2b. Agent-overlay injection. Concatenates a small cpio
         //     containing /sbin/provium-agent onto the user's initrd
@@ -1062,6 +1071,15 @@ impl Backend for QemuBackend {
             .as_ref()
             .ok_or(VmmError::Unimplemented("VM already shut down"))?;
         qmp.execute("system_powerdown", serde_json::Value::Null)?;
+        Ok(())
+    }
+
+    fn wakeup(&self) -> Result<(), VmmError> {
+        let qmp = self.qmp.lock().unwrap();
+        let qmp = qmp
+            .as_ref()
+            .ok_or(VmmError::Unimplemented("VM already shut down"))?;
+        qmp.execute("system_wakeup", serde_json::Value::Null)?;
         Ok(())
     }
 
