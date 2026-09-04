@@ -42,6 +42,10 @@ pub struct BootOpts {
     pub cpus: Option<u32>,
     /// Override the profile's `cmdline`. `None` uses the profile.
     pub cmdline_override: Option<String>,
+    /// Tokens appended after the resolved command line (the profile's,
+    /// or `cmdline_override`) — for a test that wants one extra kernel
+    /// parameter without restating the profile's line.
+    pub cmdline_append: Option<String>,
     /// Files to inject into the VM at boot — currently unused, slot
     /// reserved for the slice-2 file-injection mechanism.
     pub files: Vec<InjectedFile>,
@@ -176,6 +180,11 @@ impl VmInstance {
         self.backend.power_button()
     }
 
+    /// Wake a guest that suspended itself (QMP `system_wakeup`).
+    pub fn wakeup(&self) -> Result<(), VmmError> {
+        self.backend.wakeup()
+    }
+
     /// Toggle a NIC's link state via the backend.
     pub fn set_link(&self, netdev_id: &str, up: bool) -> Result<(), VmmError> {
         self.backend.set_link(netdev_id, up)
@@ -242,6 +251,12 @@ pub(crate) trait Backend: Send + Sync {
     /// `system_powerdown`.
     fn power_button(&self) -> Result<(), VmmError> {
         Err(VmmError::Unimplemented("backend power_button"))
+    }
+    /// Default-impl: unsupported. QemuBackend overrides via QMP
+    /// `system_wakeup`, which resumes a guest that entered S3 on its
+    /// own (e.g. by writing `mem` to /sys/power/state).
+    fn wakeup(&self) -> Result<(), VmmError> {
+        Err(VmmError::Unimplemented("backend wakeup"))
     }
     /// Toggle a NIC's link state visible to the guest. Default-impl
     /// is a no-op so non-QEMU backends silently ignore.

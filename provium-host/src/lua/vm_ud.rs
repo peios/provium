@@ -360,6 +360,10 @@ impl UserData for VmUd {
             this.vm.power_button().map_err(mlua::Error::external)?;
             Ok(())
         });
+        methods.add_method("wakeup", |_, this, ()| {
+            this.vm.wakeup().map_err(mlua::Error::external)?;
+            Ok(())
+        });
 
         // File-system ops missing from earlier slices (Phase A/B).
         methods.add_method(
@@ -1088,6 +1092,9 @@ fn parse_boot_overrides(t: &mlua::Table) -> mlua::Result<crate::vmm::BootOpts> {
     let mut opts = crate::vmm::BootOpts::default();
     if let Ok(cmdline) = t.get::<String>("kernel_cmdline") {
         opts.cmdline_override = Some(cmdline);
+    }
+    if let Ok(extra) = t.get::<String>("kernel_cmdline_append") {
+        opts.cmdline_append = Some(extra);
     }
     if let Ok(rng) = t.get::<u64>("rng_seed") {
         opts.rng_seed = Some(rng);

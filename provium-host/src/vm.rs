@@ -554,6 +554,9 @@ impl Vm {
         if overrides.cmdline_override.is_some() {
             cur.cmdline_override = overrides.cmdline_override;
         }
+        if overrides.cmdline_append.is_some() {
+            cur.cmdline_append = overrides.cmdline_append;
+        }
         if overrides.rng_seed.is_some() {
             cur.rng_seed = overrides.rng_seed;
         }
@@ -672,6 +675,9 @@ impl Vm {
         if let Some(over) = self.inner.lock().unwrap().boot_overrides.take() {
             if over.cmdline_override.is_some() {
                 opts.cmdline_override = over.cmdline_override;
+            }
+            if over.cmdline_append.is_some() {
+                opts.cmdline_append = over.cmdline_append;
             }
             if over.rng_seed.is_some() {
                 opts.rng_seed = over.rng_seed;
@@ -1093,6 +1099,28 @@ impl Vm {
             .as_ref()
             .ok_or_else(|| self.wrong_state(inner.state, "reset"))?;
         let r = inst.reset();
+        drop(inner);
+        if let Err(e) = &r {
+            self.maybe_mark_dead_on_vmm_err(e);
+        }
+        r.map_err(VmError::Vmm)
+    }
+
+    /// Wake a guest that suspended itself (ACPI S3) via QMP
+    /// `system_wakeup`. Booted-only, like `reset`: a suspended guest is
+    /// still Booted from the host's side — its vCPUs are halted, not
+    /// its VMM.
+    pub fn wakeup(&self) -> Result<(), VmError> {
+        let inner = self.inner.lock().unwrap();
+        if inner.state != VmState::Booted {
+            return Err(self.wrong_state(inner.state, "wakeup"));
+        }
+        let res = inner.running.as_ref().ok_or_else(|| self.wrong_state(inner.state, "wakeup"))?;
+        let inst = res
+            .instance
+            .as_ref()
+            .ok_or_else(|| self.wrong_state(inner.state, "wakeup"))?;
+        let r = inst.wakeup();
         drop(inner);
         if let Err(e) = &r {
             self.maybe_mark_dead_on_vmm_err(e);
