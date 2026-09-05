@@ -38,7 +38,7 @@ impl LocalAgentVmm {
     /// Build with a fresh [`CidAllocator`].
     pub fn new() -> Self {
         Self {
-            cids: Arc::new(CidAllocator::new()),
+            cids: Arc::new(CidAllocator::for_this_process()),
         }
     }
 
