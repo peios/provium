@@ -59,6 +59,8 @@ const QMP_SOCKET_WAIT: Duration = Duration::from_secs(5);
 const QMP_CONNECT_RETRY: Duration = Duration::from_secs(3);
 /// Cadence of the QMP connect-retry loop.
 const QMP_CONNECT_INTERVAL: Duration = Duration::from_millis(20);
+/// How many further CIDs to try when QEMU reports the guest CID in use.
+const CID_RETRY_ATTEMPTS: u32 = 8;
 /// How long the agent retry loop will keep dialling the in-VM agent
 /// before giving up. Covers kernel boot + agent startup; the spike
 /// kernel boots in ~150ms but production kernels are larger.
@@ -236,6 +238,8 @@ impl QemuVmm {
             }
         }
 
+        let mut cid_attempts = 0u32;
+        let (cid, scratch, console_log, console_socket, child, qmp, memory_bytes, cpus) = 'launch: loop {
         // 2. CID + scratch dir. The scratch directory is named by the
         // CID and created with a plain (non-recursive) create_dir, which
         // is atomic on every filesystem provium runs on: whichever
@@ -334,9 +338,15 @@ impl QemuVmm {
 
         // 3. Spawn QEMU.
         let mut command = build_qemu_command(&plan);
+        // QEMU's own diagnostics go to a file beside the sockets, so a
+        // launch that dies before QMP answers can say why.
+        let qemu_stderr = scratch.join("qemu.stderr");
+        let stderr_sink = std::fs::File::create(&qemu_stderr)
+            .map(Stdio::from)
+            .unwrap_or_else(|_| Stdio::null());
         command
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(stderr_sink)
             .stdin(Stdio::null());
         // PR_SET_PDEATHSIG so QEMU dies if provium itself is
         // SIGKILLed / segfaults / OOM-killed. Without this the
@@ -396,13 +406,34 @@ impl QemuVmm {
                     Err(e) => {
                         if Instant::now() >= deadline {
                             let _ = kill_child(&child);
+                            let said = std::fs::read_to_string(&qemu_stderr)
+                                .unwrap_or_default();
                             let _ = std::fs::remove_dir_all(&scratch);
+                            let said = said.trim();
+                            // A guest CID held by a VM whose scratch
+                            // directory is gone (an orphan from a crashed
+                            // run, or a VM that exited inside the kernel's
+                            // post-exit grace) is not ours to wait for:
+                            // take the next CID and launch again.
+                            if said.contains("unable to set guest cid")
+                                && cid_attempts < CID_RETRY_ATTEMPTS
+                            {
+                                cid_attempts += 1;
+                                continue 'launch;
+                            }
+                            if !said.is_empty() {
+                                return Err(VmmError::Io(std::io::Error::other(format!(
+                                    "QMP connect failed ({e}); qemu said: {said}"
+                                ))));
+                            }
                             return Err(VmmError::Qmp(e));
                         }
                         thread::sleep(QMP_CONNECT_INTERVAL);
                     }
                 }
             }
+        };
+        break (cid, scratch, console_log, console_socket, child, qmp, memory_bytes, cpus);
         };
 
         // 4b. If we launched with `-incoming`, drain the inbound
