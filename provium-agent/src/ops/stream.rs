@@ -125,6 +125,21 @@ where
     R: Read,
     W: Write,
 {
+    // A worker-spawned process has its buffers in the worker, and the
+    // worker channel is a request/reply pipe a stream cannot own.
+    if let Some((worker, _)) = state.worker_process(args.handle) {
+        return write_agent_message(
+            writer,
+            &AgentMessage::AgentError(provium_protocol::wire::AgentError {
+                kind: provium_protocol::wire::AgentErrorKind::BadRequest,
+                message: format!(
+                    "proc_stream: {} was spawned by {worker}; a worker-spawned process \
+                     cannot be streamed — read its output from proc:wait instead",
+                    args.handle
+                ),
+            }),
+        );
+    }
     // Look up the buffer + drain-thread join handle by handle.
     let buf_arc = match state.with_process_mut(args.handle, |slot| {
         let b = match args.channel {

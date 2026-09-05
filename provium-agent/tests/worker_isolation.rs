@@ -198,3 +198,139 @@ fn worker_async_syscall_begins_and_awaits_in_the_worker_process() {
     let status = child.wait().expect("reap worker");
     assert!(status.success(), "worker exits 0 on EOF, got {status:?}");
 }
+
+// ---------------------------------------------------------------------------
+// WorkerRunAsync: a child spawned inside the worker, driven through the
+// parent's process ops.
+// ---------------------------------------------------------------------------
+
+/// Stand the spawned worker up in a parent [`AgentState`] the way
+/// `ops::worker::spawn` would, so the parent-side relay path is what
+/// runs: `worker_run_async` files the grandchild under a parent handle,
+/// and `get_pid` / `kill` / `wait` find the mapping and relay.
+#[test]
+fn worker_run_async_spawns_a_grandchild_the_parent_ops_can_drive() {
+    use provium_agent::ops::{process, worker};
+    use provium_agent::state::{AgentState, WorkerConn};
+    use provium_protocol::wire::{
+        ExitStatus, GetPidArgs, KillArgs, ProcStatusArgs, ProcessLiveStatus, RunAsyncArgs,
+        WaitArgs, WorkerRunAsyncArgs,
+    };
+    use std::sync::Arc;
+
+    let (child, control) = spawn_worker();
+    let worker_pid = child.id();
+    let state = Arc::new(AgentState::new());
+    let handle = state.insert_worker_conn(WorkerConn { child, control });
+
+    // Spawn `sleep 30` inside the worker.
+    let outer = match worker::worker_run_async(
+        WorkerRunAsyncArgs {
+            handle,
+            args: RunAsyncArgs {
+                cmd: "sleep".into(),
+                args: vec!["30".into()],
+                env: Default::default(),
+                env_clear: false,
+                cwd: None,
+            },
+        },
+        &state,
+    ) {
+        AgentMessage::WorkerRunAsyncResult(OpResult::Ok(h)) => h,
+        other => panic!("worker_run_async: {other:?}"),
+    };
+    assert!(
+        state.worker_process(outer).is_some(),
+        "the parent filed the grandchild under its own handle"
+    );
+
+    // Its pid is a real process, distinct from the worker, whose
+    // parent is the worker — the exec happened in the worker's context.
+    let pid = match process::get_pid(GetPidArgs { handle: outer }, &state) {
+        AgentMessage::GetPidResult(OpResult::Ok(p)) => p,
+        other => panic!("get_pid: {other:?}"),
+    };
+    assert_ne!(pid, worker_pid, "the grandchild is not the worker");
+    assert_ne!(pid, std::process::id(), "nor this process");
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("grandchild /proc stat");
+    let after_comm = stat.rsplit(')').next().unwrap();
+    let ppid: u32 = after_comm.split_whitespace().nth(1).unwrap().parse().unwrap();
+    assert_eq!(ppid, worker_pid, "the grandchild's parent is the worker");
+
+    match process::proc_status(ProcStatusArgs { handle: outer }, &state) {
+        AgentMessage::ProcStatusResult(OpResult::Ok(ProcessLiveStatus::Running)) => {}
+        other => panic!("proc_status: {other:?}"),
+    }
+
+    // Kill and collect through the parent's ops; the wait consumes the
+    // mapping.
+    match process::kill(
+        KillArgs {
+            handle: outer,
+            signal: libc::SIGTERM,
+        },
+        &state,
+    ) {
+        AgentMessage::KillResult(OpResult::Ok(())) => {}
+        other => panic!("kill: {other:?}"),
+    }
+    let ok = match process::wait(
+        WaitArgs {
+            handle: outer,
+            timeout_ms: Some(5000),
+        },
+        &state,
+    ) {
+        AgentMessage::WaitResult(OpResult::Ok(ok)) => ok,
+        other => panic!("wait: {other:?}"),
+    };
+    assert_eq!(ok.status, ExitStatus::Signalled(libc::SIGTERM));
+    assert!(state.worker_process(outer).is_none(), "wait consumed the mapping");
+
+    // A wait that runs out of time kills the grandchild and reports it
+    // as the parent table would: TimedOut, and the process is gone.
+    let outer = match worker::worker_run_async(
+        WorkerRunAsyncArgs {
+            handle,
+            args: RunAsyncArgs {
+                cmd: "sleep".into(),
+                args: vec!["30".into()],
+                env: Default::default(),
+                env_clear: false,
+                cwd: None,
+            },
+        },
+        &state,
+    ) {
+        AgentMessage::WorkerRunAsyncResult(OpResult::Ok(h)) => h,
+        other => panic!("worker_run_async: {other:?}"),
+    };
+    let pid = match process::get_pid(GetPidArgs { handle: outer }, &state) {
+        AgentMessage::GetPidResult(OpResult::Ok(p)) => p,
+        other => panic!("get_pid: {other:?}"),
+    };
+    let started = std::time::Instant::now();
+    let ok = match process::wait(
+        WaitArgs {
+            handle: outer,
+            timeout_ms: Some(200),
+        },
+        &state,
+    ) {
+        AgentMessage::WaitResult(OpResult::Ok(ok)) => ok,
+        other => panic!("wait: {other:?}"),
+    };
+    assert_eq!(ok.status, ExitStatus::TimedOut);
+    assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    assert!(
+        !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+        "the timed-out grandchild was killed and reaped"
+    );
+
+    // Join: the worker's processes go with it.
+    let conn = state.remove_worker_conn(handle).unwrap();
+    let mut conn = Arc::try_unwrap(conn).unwrap().into_inner().unwrap();
+    let _ = conn.control.shutdown(std::net::Shutdown::Both);
+    assert!(conn.child.wait().unwrap().success());
+}
