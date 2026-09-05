@@ -809,7 +809,7 @@ fn run(args: Args) -> Result<u32, Box<dyn std::error::Error>> {
             let mut cfg = provium_host::vmm::qemu::QemuVmmConfig::defaults();
             cfg.ksm_enabled = !args.no_ksm;
             Arc::new(provium_host::vmm::qemu::QemuVmm::with_config(
-                std::sync::Arc::new(provium_host::cid::CidAllocator::new()),
+                std::sync::Arc::new(provium_host::cid::CidAllocator::for_this_process()),
                 cfg,
             ))
         }
