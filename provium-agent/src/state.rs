@@ -72,6 +72,13 @@ pub struct AgentState {
     /// Worker (sub-agent) registry. Each entry is a real child process
     /// reachable over its control socket — see [`WorkerConn`].
     workers: Mutex<HashMap<WorkerHandle, Arc<Mutex<WorkerConn>>>>,
+    /// Processes spawned *inside* a worker by `WorkerRunAsync`. The
+    /// child lives in the worker's own process table under the
+    /// worker's handle id; the host holds a handle allocated here, so
+    /// the process-family ops (`Wait`, `Kill`, `GetPid`, …) can tell a
+    /// worker-spawned process from one of ours and relay to the worker
+    /// — see [`crate::ops::worker::worker_run_async`].
+    worker_processes: Mutex<HashMap<ProcessHandle, (WorkerHandle, ProcessHandle)>>,
 }
 
 /// Per-process state held while the child is alive.
@@ -102,6 +109,7 @@ impl AgentState {
             files: Mutex::new(HashMap::new()),
             processes: Mutex::new(HashMap::new()),
             workers: Mutex::new(HashMap::new()),
+            worker_processes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -145,6 +153,49 @@ impl AgentState {
     /// Number of currently-tracked workers. Test / introspection only.
     pub fn open_worker_count(&self) -> usize {
         self.workers.lock().unwrap().len()
+    }
+
+    // --- Worker-spawned processes ------------------------------------
+
+    /// File a process the worker `worker` spawned under `inner` (its
+    /// handle in the worker's own table) and return the handle the host
+    /// will use. Allocated from the shared counter, so it never collides
+    /// with one of this agent's own processes.
+    pub fn insert_worker_process(
+        &self,
+        worker: WorkerHandle,
+        inner: ProcessHandle,
+    ) -> ProcessHandle {
+        let outer = ProcessHandle::new(self.alloc_id());
+        self.worker_processes
+            .lock()
+            .unwrap()
+            .insert(outer, (worker, inner));
+        outer
+    }
+
+    /// If `handle` names a worker-spawned process, the worker and the
+    /// handle it knows the process by.
+    pub fn worker_process(&self, handle: ProcessHandle) -> Option<(WorkerHandle, ProcessHandle)> {
+        self.worker_processes.lock().unwrap().get(&handle).copied()
+    }
+
+    /// Forget a worker-spawned process — once `Wait` has collected it.
+    pub fn remove_worker_process(
+        &self,
+        handle: ProcessHandle,
+    ) -> Option<(WorkerHandle, ProcessHandle)> {
+        self.worker_processes.lock().unwrap().remove(&handle)
+    }
+
+    /// Forget every process spawned by `worker`. Called on
+    /// `worker_join`: the worker's table went with the worker, and a
+    /// grandchild still running is reparented to PID 1 like any orphan.
+    pub fn remove_worker_processes_of(&self, worker: WorkerHandle) {
+        self.worker_processes
+            .lock()
+            .unwrap()
+            .retain(|_, (w, _)| *w != worker);
     }
 
     // --- Async processes ---------------------------------------------

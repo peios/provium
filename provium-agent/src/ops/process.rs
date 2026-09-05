@@ -8,12 +8,15 @@ use std::thread;
 use std::time::Duration;
 
 use provium_protocol::wire::{
-    AgentError, AgentErrorKind, AgentMessage, ExecOk, ExitStatus, GetPidArgs, KillArgs, OpResult,
+    AgentError, AgentErrorKind, AgentMessage, ExecOk, ExitStatus, GetPidArgs, HostMessage, KillArgs,
+    OpResult,
     ProcStatusArgs, ProcStdinCloseArgs, ProcStdinWriteArgs, ProcStdinWriteOk, ProcessLiveStatus,
     RunAsyncArgs, WaitArgs,
 };
 
 use crate::state::{AgentState, ProcessSlot};
+
+use super::worker;
 
 use super::os_error_from_io;
 
@@ -71,6 +74,10 @@ pub fn run_async(args: RunAsyncArgs, state: &Arc<AgentState>) -> AgentMessage {
 /// `Wait` — block until the child exits (with optional timeout),
 /// drain captured output, return as `ExecOk`.
 pub fn wait(args: WaitArgs, state: &Arc<AgentState>) -> AgentMessage {
+    // A worker-spawned process lives in the worker's table: relay.
+    if let Some((w, inner)) = state.worker_process(args.handle) {
+        return worker::worker_wait(args.handle, w, inner, args.timeout_ms, state);
+    }
     let Some(mut slot) = state.take_process(args.handle) else {
         return AgentMessage::AgentError(AgentError {
             kind: AgentErrorKind::UnknownHandle,
@@ -139,6 +146,10 @@ pub fn wait(args: WaitArgs, state: &Arc<AgentState>) -> AgentMessage {
 /// `Kill` — send `signal` to the tracked child. Caller still has
 /// to call `Wait` to reap the process.
 pub fn kill(args: KillArgs, state: &Arc<AgentState>) -> AgentMessage {
+    if let Some((w, inner)) = state.worker_process(args.handle) {
+        let op = HostMessage::Kill(KillArgs { handle: inner, ..args });
+        return worker::relay_process_op("kill", w, op, state);
+    }
     let pid = state.with_process_mut(args.handle, |slot| {
         slot.child.as_ref().map(|c| c.id())
     });
@@ -174,6 +185,10 @@ pub fn kill(args: KillArgs, state: &Arc<AgentState>) -> AgentMessage {
 /// `proc:pid()` on the host calls into this so test code sees the
 /// actual process number rather than the provium handle counter.
 pub fn get_pid(args: GetPidArgs, state: &Arc<AgentState>) -> AgentMessage {
+    if let Some((w, inner)) = state.worker_process(args.handle) {
+        let op = HostMessage::GetPid(GetPidArgs { handle: inner });
+        return worker::relay_process_op("get_pid", w, op, state);
+    }
     let pid = state.with_process_mut(args.handle, |slot| {
         slot.child.as_ref().map(|c| c.id())
     });
@@ -243,6 +258,10 @@ fn wait_with_timeout(
 
 /// `ProcStdinWrite` — write to a tracked child's stdin.
 pub fn proc_stdin_write(args: ProcStdinWriteArgs, state: &Arc<AgentState>) -> AgentMessage {
+    if let Some((w, inner)) = state.worker_process(args.handle) {
+        let op = HostMessage::ProcStdinWrite(ProcStdinWriteArgs { handle: inner, ..args });
+        return worker::relay_process_op("proc_stdin_write", w, op, state);
+    }
     let outcome = state.with_process_mut(args.handle, |slot| {
         let pipe = match slot.stdin.as_mut() {
             Some(p) => p,
@@ -270,6 +289,10 @@ pub fn proc_stdin_write(args: ProcStdinWriteArgs, state: &Arc<AgentState>) -> Ag
 
 /// `ProcStdinClose` — drop the stdin pipe so the child sees EOF.
 pub fn proc_stdin_close(args: ProcStdinCloseArgs, state: &Arc<AgentState>) -> AgentMessage {
+    if let Some((w, inner)) = state.worker_process(args.handle) {
+        let op = HostMessage::ProcStdinClose(ProcStdinCloseArgs { handle: inner });
+        return worker::relay_process_op("proc_stdin_close", w, op, state);
+    }
     let outcome = state.with_process_mut(args.handle, |slot| {
         slot.stdin = None;
         AgentMessage::ProcStdinCloseResult(OpResult::Ok(()))
@@ -284,6 +307,10 @@ pub fn proc_stdin_close(args: ProcStdinCloseArgs, state: &Arc<AgentState>) -> Ag
 
 /// `ProcStatus` — non-destructive liveness query.
 pub fn proc_status(args: ProcStatusArgs, state: &Arc<AgentState>) -> AgentMessage {
+    if let Some((w, inner)) = state.worker_process(args.handle) {
+        let op = HostMessage::ProcStatus(ProcStatusArgs { handle: inner });
+        return worker::relay_process_op("proc_status", w, op, state);
+    }
     let status = state.with_process_mut(args.handle, |slot| {
         let child = match slot.child.as_mut() {
             Some(c) => c,

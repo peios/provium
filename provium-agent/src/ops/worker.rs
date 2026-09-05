@@ -17,14 +17,26 @@
 //! by issuing ordinary `worker:syscall` calls (KACS token-install /
 //! adjust-privs / set-psb), which now stick to the child alone.
 //!
+//! [`WorkerRunAsync`] also runs in the child: the grandchild is forked
+//! and exec'd by the worker, so it starts life with the worker's
+//! credentials — which is the whole point when the worker is a
+//! principal the test minted (exec under a token, NEW_PROCESS_MIN, a
+//! descriptor surviving exec). The process lands in the *worker's*
+//! table; the parent files it under a handle of its own in
+//! [`AgentState::insert_worker_process`], and the process-family ops
+//! (`Wait`, `Kill`, `GetPid`, `ProcStatus`, stdin) look there first and
+//! relay down the worker's socket when they find it. The host sees an
+//! ordinary Process. `ProcStream` is the one op not relayed — a stream
+//! owns the connection for its lifetime and the worker channel is a
+//! strict request/reply pipe.
+//!
 //! ## What is not (v1)
 //!
-//! `WorkerOpenFile` / `WorkerRunAsync` are rejected: a file or process
-//! handle minted in the child's table can't be reached by the host's
-//! parent-scoped `file:read` / `Wait` routing. Tests open files and
-//! spawn processes from inside the worker via raw `worker:syscall`
-//! (`openat`, `clone`/`execve`) instead, keeping everything in the
-//! child's process where its credentials apply.
+//! `WorkerOpenFile` is rejected: a file handle minted in the child's
+//! table can't be reached by the host's parent-scoped `file:read` /
+//! `file:write` routing. Tests open files from inside the worker via
+//! raw `worker:syscall(openat, …)` instead, keeping the descriptor in
+//! the child's process where its credentials apply.
 
 use std::io::Write;
 use std::os::unix::io::RawFd;
@@ -32,15 +44,25 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use provium_protocol::frame::{read_frame, write_frame, DEFAULT_MAX_FRAME_BYTES};
+use provium_protocol::handle::{ProcessHandle, WorkerHandle};
 use provium_protocol::wire::{
-    AgentError, AgentErrorKind, AgentMessage, HostMessage, OpResult, SpawnWorkerArgs,
-    WorkerExecArgs, WorkerJoinArgs, WorkerJoinPayload, WorkerKillArgs, WorkerOpenFileArgs,
-    WorkerRunAsyncArgs, WorkerSyscallArgs, WorkerSyscallAwaitArgs, WorkerSyscallBeginArgs,
+    AgentError, AgentErrorKind, AgentMessage, HostMessage, OpResult, ProcStatusArgs,
+    ProcessLiveStatus, SpawnWorkerArgs, WaitArgs, WorkerExecArgs, WorkerJoinArgs,
+    WorkerJoinPayload, WorkerKillArgs, WorkerOpenFileArgs, WorkerRunAsyncArgs, WorkerSyscallArgs,
+    WorkerSyscallAwaitArgs, WorkerSyscallBeginArgs,
 };
 
 use crate::state::{AgentState, WorkerConn};
+
+/// How often a relayed `Wait` asks the worker whether the grandchild
+/// is still running. The worker's serve loop is serial, so the wait
+/// is polled rather than relayed as one blocking `Wait`: between
+/// polls the channel is free for the other ops a test may still be
+/// issuing to that worker.
+const WORKER_WAIT_POLL: Duration = Duration::from_millis(20);
 
 /// `SpawnWorker` — fork+exec a sub-agent and register its control
 /// channel. Returns the new worker handle.
@@ -212,6 +234,9 @@ pub fn worker_join(args: WorkerJoinArgs, state: &Arc<AgentState>) -> AgentMessag
     let Some(conn) = state.remove_worker_conn(args.handle) else {
         return unknown_worker("worker_join", args.handle);
     };
+    // Its process table goes with it; anything still running there is
+    // an orphan now, not something a handle of ours can reach.
+    state.remove_worker_processes_of(args.handle);
     // We removed the only registry reference; unwrap the Arc/Mutex to
     // own the connection so we can drop the socket and wait.
     let conn = match Arc::try_unwrap(conn) {
@@ -249,20 +274,101 @@ pub fn worker_open_file(args: WorkerOpenFileArgs, state: &Arc<AgentState>) -> Ag
     })
 }
 
-/// `WorkerRunAsync` — not supported under a process-isolated worker; the
-/// process handle would live in the child's table, out of reach of the
-/// host's parent-scoped `Wait`/`Kill`. Spawn from inside the worker with
-/// `worker:syscall(clone/execve, …)` or `worker:exec`.
+/// `WorkerRunAsync` — fork+exec a child *in the worker's process*, so
+/// it inherits the worker's credentials. The worker registers the
+/// child in its own table and hands back its handle; we file that under
+/// a handle from our counter and return ours. Every later process op on
+/// it finds the mapping and relays — see [`relay_process_op`].
 pub fn worker_run_async(args: WorkerRunAsyncArgs, state: &Arc<AgentState>) -> AgentMessage {
-    if !state.has_worker(args.handle) {
+    let Some(conn) = state.worker_conn(args.handle) else {
         return unknown_worker("worker_run_async", args.handle);
+    };
+    let mut conn = conn.lock().unwrap();
+    match relay(&mut conn, HostMessage::RunAsync(args.args)) {
+        Ok(AgentMessage::RunAsyncResult(OpResult::Ok(inner))) => {
+            let outer = state.insert_worker_process(args.handle, inner);
+            AgentMessage::WorkerRunAsyncResult(OpResult::Ok(outer))
+        }
+        Ok(AgentMessage::RunAsyncResult(OpResult::Err(e))) => {
+            AgentMessage::WorkerRunAsyncResult(OpResult::Err(e))
+        }
+        Ok(other) => relay_shape_err("worker_run_async", other),
+        Err(msg) => relay_io_err("worker_run_async", msg),
     }
-    AgentMessage::AgentError(AgentError {
-        kind: AgentErrorKind::BadRequest,
-        message: "worker_run_async: not supported for a process-isolated worker; \
-                  use worker:exec or worker:syscall to spawn within the worker process"
-            .into(),
-    })
+}
+
+/// Relay a process-family op (`Kill`, `GetPid`, `ProcStatus`,
+/// `ProcStdinWrite`, `ProcStdinClose`) for a process that
+/// [`worker_run_async`] spawned. `op` must already name the process by
+/// the *worker's* handle for it; the reply is the worker's own, which
+/// is the same variant the host expects, so it passes straight through.
+pub fn relay_process_op(
+    op_name: &str,
+    worker: WorkerHandle,
+    op: HostMessage,
+    state: &Arc<AgentState>,
+) -> AgentMessage {
+    let Some(conn) = state.worker_conn(worker) else {
+        return worker_gone(op_name, worker);
+    };
+    let mut conn = conn.lock().unwrap();
+    match relay(&mut conn, op) {
+        Ok(reply) => reply,
+        Err(msg) => relay_io_err(op_name, msg),
+    }
+}
+
+/// `Wait` for a worker-spawned process. Polls the worker's `ProcStatus`
+/// until the child has exited or `timeout_ms` has elapsed, then relays
+/// one `Wait` to collect the status and captured output. On our
+/// timeout that `Wait` carries a zero cap, so the worker kills the
+/// child and reports `TimedOut` exactly as the parent table would
+/// have. The mapping is dropped once collected: a `Wait` consumes the
+/// process on both sides.
+pub fn worker_wait(
+    outer: ProcessHandle,
+    worker: WorkerHandle,
+    inner: ProcessHandle,
+    timeout_ms: Option<u64>,
+    state: &Arc<AgentState>,
+) -> AgentMessage {
+    let Some(conn) = state.worker_conn(worker) else {
+        state.remove_worker_process(outer);
+        return worker_gone("wait", worker);
+    };
+    let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+    let mut timed_out = false;
+    loop {
+        let status = {
+            let mut conn = conn.lock().unwrap();
+            relay(&mut conn, HostMessage::ProcStatus(ProcStatusArgs { handle: inner }))
+        };
+        match status {
+            Ok(AgentMessage::ProcStatusResult(OpResult::Ok(ProcessLiveStatus::Running))) => {}
+            // Exited, or the worker no longer knows it: collect.
+            Ok(AgentMessage::ProcStatusResult(_)) => break,
+            Ok(other) => return relay_shape_err("wait", other),
+            Err(msg) => return relay_io_err("wait", msg),
+        }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            timed_out = true;
+            break;
+        }
+        std::thread::sleep(WORKER_WAIT_POLL);
+    }
+    let collect = HostMessage::Wait(WaitArgs {
+        handle: inner,
+        timeout_ms: if timed_out { Some(0) } else { None },
+    });
+    let reply = {
+        let mut conn = conn.lock().unwrap();
+        relay(&mut conn, collect)
+    };
+    state.remove_worker_process(outer);
+    match reply {
+        Ok(reply) => reply,
+        Err(msg) => relay_io_err("wait", msg),
+    }
 }
 
 // --- helpers ---------------------------------------------------------
@@ -291,6 +397,14 @@ fn reap_worker(conn: &mut WorkerConn) -> i32 {
         }),
         Err(_) => 1,
     }
+}
+
+/// The process was spawned by a worker that has since been joined.
+fn worker_gone(op: &str, worker: WorkerHandle) -> AgentMessage {
+    AgentMessage::AgentError(AgentError {
+        kind: AgentErrorKind::UnknownHandle,
+        message: format!("{op}: the process was spawned by {worker}, which has been joined"),
+    })
 }
 
 fn unknown_worker(op: &str, handle: provium_protocol::handle::WorkerHandle) -> AgentMessage {
