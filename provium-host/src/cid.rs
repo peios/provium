@@ -27,6 +27,22 @@ impl CidAllocator {
         Self::starting_at(FIRST_CID)
     }
 
+    /// Build an allocator whose start is scattered by process id, so
+    /// that provium processes running side by side do not all begin
+    /// at [`FIRST_CID`] and hand the same guest CID to two QEMUs.
+    ///
+    /// A guest CID is a host-wide resource: `vhost-vsock` refuses a
+    /// CID another VM already holds, and the QEMU would die before its
+    /// QMP socket appears. The counter here only makes a collision
+    /// unlikely; [`crate::vmm::qemu`] makes it impossible by reserving
+    /// each CID's scratch directory atomically before launching.
+    pub fn for_this_process() -> Self {
+        let pid = u64::from(std::process::id());
+        // 4096 lanes of 1024 CIDs each, well inside u32.
+        let lane = pid % 4096;
+        Self::starting_at(FIRST_CID + u32::try_from(lane * 1024).expect("lane fits u32"))
+    }
+
     /// Build an allocator whose next-allocated CID is `start`. Tests
     /// use this to make CID values predictable.
     pub fn starting_at(start: u32) -> Self {
@@ -68,6 +84,14 @@ mod tests {
     fn first_allocation_is_first_cid_constant() {
         let a = CidAllocator::new();
         assert_eq!(a.allocate(), FIRST_CID);
+    }
+
+    #[test]
+    fn process_scattered_start_is_at_or_after_first_cid() {
+        let a = CidAllocator::for_this_process();
+        let c = a.allocate();
+        assert!(c >= FIRST_CID, "{c}");
+        assert_eq!((c - FIRST_CID) % 1024, 0, "lane-aligned: {c}");
     }
 
     #[test]

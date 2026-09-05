@@ -115,7 +115,7 @@ pub fn run(
             &cmdline,
             &scratch_root,
         )?;
-        let cid = crate::cid::CidAllocator::new().allocate();
+        let cid = crate::cid::CidAllocator::for_this_process().allocate();
         (prepared.initrd_path, prepared.cmdline, Some(cid))
     } else {
         if profile.initrd.as_os_str().is_empty() {

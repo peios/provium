@@ -135,7 +135,7 @@ impl Default for QemuVmmConfig {
 impl QemuVmm {
     /// Build with the default config and a fresh [`CidAllocator`].
     pub fn new() -> Self {
-        Self::with_cid_allocator(Arc::new(CidAllocator::new()))
+        Self::with_cid_allocator(Arc::new(CidAllocator::for_this_process()))
     }
 
     /// Build with the default config sharing `cids` across other VMMs.
@@ -236,10 +236,25 @@ impl QemuVmm {
             }
         }
 
-        // 2. CID + scratch dir.
-        let cid = self.cids.allocate();
-        let scratch = self.config.scratch_root.join(format!("vm-{cid}"));
-        std::fs::create_dir_all(&scratch)?;
+        // 2. CID + scratch dir. The scratch directory is named by the
+        // CID and created with a plain (non-recursive) create_dir, which
+        // is atomic on every filesystem provium runs on: whichever
+        // provium process creates `vm-<cid>` first owns that CID, and a
+        // second process — or a stale directory from a crashed run —
+        // makes the allocator move on. Without this, two provium
+        // processes started together both count from the same base and
+        // launch two QEMUs with one guest CID; vhost-vsock refuses the
+        // second and it dies before its QMP socket appears.
+        std::fs::create_dir_all(&self.config.scratch_root)?;
+        let (cid, scratch) = loop {
+            let cid = self.cids.allocate();
+            let scratch = self.config.scratch_root.join(format!("vm-{cid}"));
+            match std::fs::create_dir(&scratch) {
+                Ok(()) => break (cid, scratch),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.into()),
+            }
+        };
         let qmp_socket = scratch.join("qmp.sock");
         let console_log = scratch.join("console.log");
         let console_socket = scratch.join("console.sock");
