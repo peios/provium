@@ -225,6 +225,19 @@ impl QemuVmm {
         let kernel = profile.resolve_kernel().map_err(VmmError::KernelSource)?;
         validate_profile_paths(profile, &kernel)?;
 
+        // 1a. Disks. Resolved before the CID loop because a bad id or a
+        //     missing image is a configuration error, and retrying it
+        //     against a different CID would only take longer to say so.
+        let disks = super::resolve_disks(profile, &opts.disks)?;
+        for disk in &disks {
+            if !disk.path.exists() {
+                return Err(VmmError::MissingDisk {
+                    id: disk.id.clone(),
+                    path: disk.path.clone(),
+                });
+            }
+        }
+
         // 1b. Realise host-side networking for any attached bridges.
         //     Best-effort: failures here propagate as VmmError::Io so
         //     the launch fails fast (rather than having QEMU fail
@@ -353,6 +366,7 @@ impl QemuVmm {
             console_log: &console_log,
             console_socket: &console_socket,
             nics: &opts.nic_attachments,
+            disks: &disks,
             ksm_enabled: self.config.ksm_enabled,
             rng_seed: opts.rng_seed,
             initial_time_ns: opts.initial_time_ns,
@@ -596,6 +610,10 @@ pub struct QemuLaunchPlan<'a> {
     /// NIC attachments — each emits a `-netdev tap` /
     /// `-device virtio-net-pci` pair.
     pub nics: &'a [super::NicAttachment],
+    /// Block devices — each emits a `-drive if=none` / `-device
+    /// virtio-blk-pci` pair, in order, so the guest names them
+    /// `/dev/vda`, `/dev/vdb`, … by position.
+    pub disks: &'a [super::AttachedDisk],
     /// `true` enables `merge=on` on the memory backend (KSM-eligible);
     /// `false` emits `merge=off` so VMs opt out per `--no-ksm`.
     pub ksm_enabled: bool,
@@ -748,8 +766,33 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
         }
         cmd.args(["-device", &device]);
     }
+    // Disks — one `-drive if=none` + `-device virtio-blk-pci` pair per
+    // attachment, in the order given, which is the order the guest
+    // enumerates them in as /dev/vda, /dev/vdb, …
+    //
+    // `if=none` plus an explicit device rather than the shorter
+    // `if=virtio`: the pair is what `device_del` can address, so
+    // `disk:detach()` has something to name. `format=raw` is stated
+    // rather than probed — QEMU warns when it has to guess, and a
+    // medium or a filesystem image is raw either way.
+    for disk in plan.disks {
+        let mut drive = format!(
+            "if=none,id={id},format=raw,file={file}",
+            id = disk.id,
+            file = opt_value(&disk.path),
+        );
+        if disk.readonly {
+            drive.push_str(",readonly=on");
+        }
+        cmd.args(["-drive", &drive]);
+        cmd.args([
+            "-device",
+            &format!("virtio-blk-pci,drive={id}", id = disk.id),
+        ]);
+    }
     cmd
 }
+
 
 /// Frozen inputs for [`build_interactive_qemu_command`].
 ///
@@ -908,6 +951,18 @@ fn memory_to_qemu_arg(bytes: u64) -> String {
 /// do than render with replacement chars.
 fn path_arg(p: &Path) -> String {
     p.to_string_lossy().into_owned()
+}
+
+/// A path as it must appear *inside* a QEMU option string.
+///
+/// `-kernel` and `-initrd` take a whole argument, so [`path_arg`] is
+/// enough for them. `-drive file=…` does not: QEMU splits the option
+/// on commas, and escapes a literal one by doubling it. Without this a
+/// build directory containing a comma turns the rest of the path into
+/// a garbage `-drive` option, and QEMU's complaint is about the
+/// fragment rather than the path.
+fn opt_value(p: &Path) -> String {
+    p.to_string_lossy().replace(',', ",,")
 }
 
 fn validate_profile_paths(profile: &Profile, kernel: &Path) -> Result<(), VmmError> {
@@ -1227,6 +1282,7 @@ mod tests {
             cid,
             memory_bytes: 1024 * 1024 * 1024,
             cpus: 4,
+            disks: &[],
             qmp_socket: qmp,
             console_log: console,
             console_socket: Path::new("/tmp/console.sock"),
@@ -1283,6 +1339,152 @@ mod tests {
             !args.iter().any(|a| a == "-incoming"),
             "cold launch should not pass -incoming, got {args:?}"
         );
+    }
+
+    /// A profile with nothing but the fields every launch needs, for
+    /// the tests that only care about one of them.
+    fn fake_profile() -> Profile {
+        Profile {
+            kernel: PathBuf::from("/k"),
+            initrd: PathBuf::from("/i"),
+            root: None,
+            cmdline: "console=hvc0".into(),
+            guest_os: "peios".into(),
+            inject_agent: true,
+            agent_overlay_path: None,
+            agent_boot_timeout: None,
+            disks: Vec::new(),
+            cmdline_file: None,
+            build: None,
+            build_out: None,
+            dir: None,
+        }
+    }
+
+    /// Every occurrence of `flag`'s value, in order — `-drive` and
+    /// `-device` each appear once per disk, so a single lookup would
+    /// only ever see the first.
+    fn args_after_all(args: &[String], flag: &str) -> Vec<String> {
+        args.windows(2)
+            .filter(|w| w[0] == flag)
+            .map(|w| w[1].clone())
+            .collect()
+    }
+
+    #[test]
+    fn each_disk_emits_a_drive_and_a_virtio_blk_device() {
+        let disks = [
+            super::super::AttachedDisk {
+                id: "medium".into(),
+                path: PathBuf::from("/img/peios.iso"),
+                readonly: true,
+            },
+            super::super::AttachedDisk {
+                id: "target".into(),
+                path: PathBuf::from("/img/blank.img"),
+                readonly: false,
+            },
+        ];
+        let mut plan = fake_plan(
+            7,
+            Path::new("/k"),
+            Path::new("/i"),
+            Path::new("/qmp"),
+            Path::new("/log"),
+        );
+        plan.disks = &disks;
+        let args = collect_args(&build_qemu_command(&plan));
+
+        assert_eq!(
+            args_after_all(&args, "-drive"),
+            vec![
+                "if=none,id=medium,format=raw,file=/img/peios.iso,readonly=on".to_owned(),
+                "if=none,id=target,format=raw,file=/img/blank.img".to_owned(),
+            ],
+            "read-only is opt-in per disk, and order is the order given"
+        );
+        let devices = args_after_all(&args, "-device");
+        assert!(devices.contains(&"virtio-blk-pci,drive=medium".to_owned()));
+        assert!(devices.contains(&"virtio-blk-pci,drive=target".to_owned()));
+    }
+
+    #[test]
+    fn a_comma_in_a_disk_path_is_escaped_for_the_option_string() {
+        let disks = [super::super::AttachedDisk {
+            id: "medium".into(),
+            path: PathBuf::from("/build/peios,2026.9/peios.iso"),
+            readonly: false,
+        }];
+        let mut plan = fake_plan(
+            7,
+            Path::new("/k"),
+            Path::new("/i"),
+            Path::new("/qmp"),
+            Path::new("/log"),
+        );
+        plan.disks = &disks;
+        let args = collect_args(&build_qemu_command(&plan));
+        assert_eq!(
+            arg_after(&args, "-drive").as_deref(),
+            Some("if=none,id=medium,format=raw,file=/build/peios,,2026.9/peios.iso"),
+        );
+    }
+
+    #[test]
+    fn no_disks_emits_no_drive() {
+        let plan = fake_plan(
+            7,
+            Path::new("/k"),
+            Path::new("/i"),
+            Path::new("/qmp"),
+            Path::new("/log"),
+        );
+        let args = collect_args(&build_qemu_command(&plan));
+        assert!(!args.iter().any(|a| a == "-drive"), "got {args:?}");
+    }
+
+    #[test]
+    fn profile_disks_precede_boot_disks_and_default_ids_do_not_collide() {
+        let mut profile = fake_profile();
+        profile.disks = vec![
+            crate::profile::DiskSpec {
+                path: PathBuf::from("/img/peios.iso"),
+                id: None,
+                readonly: true,
+            },
+            crate::profile::DiskSpec {
+                path: PathBuf::from("/img/second.img"),
+                id: Some("scratch".into()),
+                readonly: false,
+            },
+        ];
+        let boot = [super::super::AttachedDisk {
+            id: "boot0".into(),
+            path: PathBuf::from("/img/blank.img"),
+            readonly: false,
+        }];
+        let resolved = super::super::resolve_disks(&profile, &boot).unwrap();
+        let ids: Vec<&str> = resolved.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, vec!["disk0", "scratch", "boot0"]);
+    }
+
+    #[test]
+    fn a_boot_disk_reusing_a_profile_id_is_refused() {
+        let mut profile = fake_profile();
+        profile.disks = vec![crate::profile::DiskSpec {
+            path: PathBuf::from("/img/peios.iso"),
+            id: Some("medium".into()),
+            readonly: true,
+        }];
+        let boot = [super::super::AttachedDisk {
+            id: "medium".into(),
+            path: PathBuf::from("/img/other.img"),
+            readonly: false,
+        }];
+        match super::super::resolve_disks(&profile, &boot) {
+            Err(VmmError::DiskConflict(id)) => assert_eq!(id, "medium"),
+            other => panic!("expected DiskConflict, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1509,6 +1711,7 @@ mod tests {
             inject_agent: true,
             agent_overlay_path: None,
             agent_boot_timeout: None,
+            disks: Vec::new(),
             cmdline_file: None,
             build: None,
             build_out: None,
@@ -1537,6 +1740,7 @@ mod tests {
             inject_agent: true,
             agent_overlay_path: None,
             agent_boot_timeout: None,
+            disks: Vec::new(),
             cmdline_file: None,
             build: None,
             build_out: None,

@@ -68,6 +68,56 @@ pub struct BootOpts {
     /// host-side TAPs and `-netdev tap`/`-device virtio-net-pci`
     /// arguments. LocalAgentVmm ignores them.
     pub nic_attachments: Vec<NicAttachment>,
+    /// Block devices to attach for this boot only, appended after the
+    /// profile's own `disks`. A test that needs a blank disk to install
+    /// onto, or a deliberately damaged filesystem, puts it here; the
+    /// medium a profile boots from belongs in the profile.
+    ///
+    /// The QEMU backend honours them; the local-agent backend has no
+    /// machine to attach anything to and ignores them.
+    pub disks: Vec<AttachedDisk>,
+}
+
+/// One block device attached to a guest at launch, resolved from
+/// either a profile's `disks` or a boot's own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachedDisk {
+    /// QEMU drive id. Unique across the whole launch — the profile's
+    /// disks and the boot's share one namespace, because they share
+    /// one QEMU command line.
+    pub id: String,
+    /// Host path of the backing image.
+    pub path: PathBuf,
+    /// Attach read-only.
+    pub readonly: bool,
+}
+
+/// Merge a profile's disks with a boot's own into one launch list.
+///
+/// Profile disks come first, so the medium a profile boots from is
+/// always `/dev/vda` no matter what a test adds. Ids share one
+/// namespace across both because they share one QEMU command line; a
+/// collision is reported here rather than left to QEMU, whose own
+/// message names neither the profile nor the test.
+pub fn resolve_disks(
+    profile: &Profile,
+    boot_disks: &[AttachedDisk],
+) -> Result<Vec<AttachedDisk>, VmmError> {
+    let mut out: Vec<AttachedDisk> = Vec::new();
+    for (i, spec) in profile.disks.iter().enumerate() {
+        out.push(AttachedDisk {
+            id: spec.resolved_id(i),
+            path: spec.path.clone(),
+            readonly: spec.readonly,
+        });
+    }
+    for disk in boot_disks {
+        if out.iter().any(|d| d.id == disk.id) {
+            return Err(VmmError::DiskConflict(disk.id.clone()));
+        }
+        out.push(disk.clone());
+    }
+    Ok(out)
 }
 
 /// One NIC attachment.
@@ -124,6 +174,25 @@ pub enum VmmError {
     /// The profile does not name a kernel that can be found.
     #[error("kernel: {0}")]
     KernelSource(#[from] crate::profile::KernelError),
+
+    /// A disk's backing image does not exist. provium never creates
+    /// one — a test that wants a blank disk makes the file itself, so
+    /// its size and contents are the test's decision.
+    #[error("disk `{id}`: no image at `{path}` (provium does not create one)")]
+    MissingDisk {
+        /// The disk's id, as the profile or boot named it.
+        id: String,
+        /// The path that does not exist.
+        path: PathBuf,
+    },
+
+    /// A boot's disk reuses an id the profile already attached. Ids
+    /// name a QEMU device, so the two cannot both have it.
+    #[error(
+        "disk id `{0}` is already attached by the profile; \
+         give the boot's disk a different id"
+    )]
+    DiskConflict(String),
 
     /// Agent-overlay injection failed — the overlay file was not
     /// findable, or the user's cmdline already pinned a conflicting

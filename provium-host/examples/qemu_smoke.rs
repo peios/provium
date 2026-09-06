@@ -174,6 +174,7 @@ fn build_config(args: &CliArgs) -> Arc<Config> {
             inject_agent: true,
             agent_overlay_path: None,
             agent_boot_timeout: None,
+        disks: Vec::new(),
             cmdline_file: None,
             build: None,
             build_out: None,

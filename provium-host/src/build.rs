@@ -138,6 +138,7 @@ mod tests {
             inject_agent: true,
             agent_overlay_path: None,
             agent_boot_timeout: None,
+            disks: Vec::new(),
             build: build.map(str::to_owned),
             build_out,
             dir: None,

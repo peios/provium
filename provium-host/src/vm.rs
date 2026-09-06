@@ -566,6 +566,9 @@ impl Vm {
         if !overrides.files.is_empty() {
             cur.files.extend(overrides.files);
         }
+        if !overrides.disks.is_empty() {
+            cur.disks.extend(overrides.disks);
+        }
         Ok(())
     }
 
@@ -686,9 +689,25 @@ impl Vm {
                 opts.initial_time_ns = over.initial_time_ns;
             }
             opts.files.extend(over.files);
+            opts.disks.extend(over.disks);
             if over.agent_timeout.is_some() {
                 opts.agent_timeout = over.agent_timeout;
             }
+        }
+        // Record every disk this launch will carry — the profile's and
+        // the boot's alike — so `vm:disk(id)` resolves one attached at
+        // boot, not just one `vm:attach_disk` created afterwards. The
+        // merge is the same one the backend performs, so an id
+        // collision is reported here, before a VM is spawned.
+        let launch_disks =
+            crate::vmm::resolve_disks(&self.profile, &opts.disks).map_err(VmError::Vmm)?;
+        for disk in &launch_disks {
+            let size = std::fs::metadata(&disk.path).map(|m| m.len()).unwrap_or(0);
+            self.attach_disk_record(crate::vm::DiskAttachment {
+                id: disk.id.clone(),
+                size,
+                image: Some(disk.path.clone()),
+            });
         }
         // One NIC per bridge attachment, with stable id derived
         // from "<vm_name>-<bridge>" so it's predictable in logs

@@ -129,6 +129,20 @@ pub struct Profile {
     /// know where in that root a kernel lands.
     #[serde(default)]
     pub root: Option<PathBuf>,
+    /// Block devices attached to the guest for the whole of every boot
+    /// under this profile, in order.
+    ///
+    /// Here rather than in boot opts when the image is part of the
+    /// system under test rather than part of a test — the boot medium
+    /// an initramfs hook scans for is a sibling of `initrd` and `root`,
+    /// not something one test varies. `vm:boot({disks = …})` adds
+    /// further disks after these for the cases that do vary.
+    ///
+    /// A disk must exist before the guest's first instruction, which is
+    /// why it cannot come from `vm:attach_disk`: anything an initramfs
+    /// does happens long before there is an agent to call that.
+    #[serde(default)]
+    pub disks: Vec<DiskSpec>,
     /// Inline kernel command line. May be empty (or omitted) when
     /// `cmdline_file` is set — the two compose, file first with this
     /// appended after. Boot opts can override the whole thing per-VM.
@@ -200,6 +214,41 @@ pub struct Profile {
     /// paths and build belong to provium's cwd.
     #[serde(skip)]
     pub dir: Option<PathBuf>,
+}
+
+/// One block device attached to a guest at launch.
+///
+/// Deliberately thin: a path, a name, and whether the guest may write
+/// to it. QEMU's `-drive` accepts a great deal more, but every option
+/// added here is one a test can depend on, and the shape a Peios guest
+/// needs is a whole-disk virtio device carrying an image — that is what
+/// `/sys/block` enumeration and the root-mount hooks expect to find.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DiskSpec {
+    /// Host path of the backing image. Taken verbatim: provium never
+    /// creates one, so a missing file is a profile error reported
+    /// before QEMU is spawned.
+    pub path: PathBuf,
+    /// QEMU drive id, and the name `vm:disk(id)` looks the attachment
+    /// up under afterwards. Defaults to `disk<N>` by position, so a
+    /// profile that attaches one medium need not name it.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Attach read-only. A shipped medium wants this: it makes QEMU
+    /// refuse a guest write rather than silently modifying the image
+    /// every later boot in the run then reads.
+    #[serde(default)]
+    pub readonly: bool,
+}
+
+impl DiskSpec {
+    /// The id this disk is addressed by — the explicit one, or the
+    /// positional default.
+    pub fn resolved_id(&self, index: usize) -> String {
+        self.id
+            .clone()
+            .unwrap_or_else(|| format!("disk{index}"))
+    }
 }
 
 fn default_guest_os() -> String {
@@ -330,6 +379,9 @@ impl Profile {
         self.root = self.root.as_deref().map(fix);
         self.cmdline_file = self.cmdline_file.as_deref().map(fix);
         self.agent_overlay_path = self.agent_overlay_path.as_deref().map(fix);
+        for disk in &mut self.disks {
+            disk.path = fix(&disk.path);
+        }
     }
 
     /// The directory a profile's `build` command runs in: its own
@@ -565,6 +617,9 @@ impl Config {
             profile.cmdline = new_cmdline;
             profile.cmdline_file = new_cmdline_file;
             profile.agent_overlay_path = new_overlay;
+            for disk in &mut profile.disks {
+                disk.path = PathBuf::from(sub(&disk.path.to_string_lossy()));
+            }
         }
     }
 
@@ -589,6 +644,32 @@ impl Config {
                         ),
                     });
                 }
+            }
+            // Disk ids name a QEMU device and are what `vm:disk(id)`
+            // resolves, so a duplicate is not a shrug: QEMU refuses the
+            // second `-drive` and the launch dies with its diagnostic
+            // rather than ours. Checked against the *resolved* ids, so
+            // an explicit `disk1` colliding with an unnamed second disk
+            // is caught too.
+            let mut seen: Vec<String> = Vec::new();
+            for (i, disk) in profile.disks.iter().enumerate() {
+                if disk.path.as_os_str().is_empty() {
+                    return Err(ConfigError::Validation {
+                        path: path.into(),
+                        message: format!("profile `{name}`: disk {i} has an empty `path`"),
+                    });
+                }
+                let id = disk.resolved_id(i);
+                if seen.contains(&id) {
+                    return Err(ConfigError::Validation {
+                        path: path.into(),
+                        message: format!(
+                            "profile `{name}`: two disks share the id `{id}`; \
+                             ids name the QEMU device and must be unique"
+                        ),
+                    });
+                }
+                seen.push(id);
             }
             // v1: only the Peios agent port exists. Surface a clear
             // diagnostic rather than booting and watching the agent
@@ -725,6 +806,7 @@ guest_os = "linux"
             inject_agent: true,
             agent_overlay_path: None,
             agent_boot_timeout: None,
+            disks: Vec::new(),
             build: None,
             build_out: None,
             dir: None,
@@ -964,6 +1046,79 @@ initrd = "/i"
         assert_eq!(p.kernel, dir.join("boot/vmlinuz"));
         assert_eq!(p.initrd, dir.join("boot/initrd.cpio.gz"));
         assert_eq!(p.cmdline_file.as_deref(), Some(dir.join("cmdline").as_path()));
+    }
+
+    #[test]
+    fn disks_parse_with_defaults_and_are_absent_when_unset() {
+        let cfg = Config::from_toml_str(
+            "[profiles.medium]\nkernel = \"/k\"\ninitrd = \"/i\"\n\
+             cmdline = \"console=hvc0\"\n\
+             disks = [{ path = \"/img/peios.iso\", readonly = true }, \
+             { path = \"/img/blank.img\", id = \"target\" }]\n\
+             \n[profiles.plain]\nkernel = \"/k\"\ninitrd = \"/i\"\n\
+             cmdline = \"console=hvc0\"\n",
+            &fake_path(),
+        )
+        .unwrap();
+        let disks = &cfg.profile("medium").unwrap().disks;
+        assert_eq!(disks.len(), 2);
+        assert_eq!(disks[0].path, PathBuf::from("/img/peios.iso"));
+        assert!(disks[0].readonly);
+        assert_eq!(disks[0].resolved_id(0), "disk0", "unnamed disks take a positional id");
+        assert!(!disks[1].readonly, "readonly is opt-in");
+        assert_eq!(disks[1].resolved_id(1), "target");
+        assert!(cfg.profile("plain").unwrap().disks.is_empty());
+    }
+
+    #[test]
+    fn two_disks_with_the_same_id_are_a_config_error() {
+        let err = Config::from_toml_str(
+            "[profiles.p]\nkernel = \"/k\"\ninitrd = \"/i\"\ncmdline = \"console=hvc0\"\n\
+             disks = [{ path = \"/a\", id = \"medium\" }, { path = \"/b\", id = \"medium\" }]\n",
+            &fake_path(),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("share the id `medium`"), "{err}");
+    }
+
+    /// The positional default is what an explicit id can collide with,
+    /// so the check has to run against resolved ids rather than the
+    /// written ones.
+    #[test]
+    fn an_explicit_id_colliding_with_a_positional_default_is_caught() {
+        let err = Config::from_toml_str(
+            "[profiles.p]\nkernel = \"/k\"\ninitrd = \"/i\"\ncmdline = \"console=hvc0\"\n\
+             disks = [{ path = \"/a\" }, { path = \"/b\", id = \"disk0\" }]\n",
+            &fake_path(),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("share the id `disk0`"), "{err}");
+    }
+
+    /// A disk is a build output like the kernel and the initrd, so it
+    /// has to take the same two path treatments: rebased against the
+    /// profile's own directory, and `{out}`-expanded afterwards.
+    #[test]
+    fn disk_paths_are_rebased_and_out_expanded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("profiles").join("medium");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(PROFILE_FILE),
+            "kernel = \"/k\"\ninitrd = \"/i\"\ncmdline = \"console=hvc0\"\n\
+             build_out = \"/build/medium\"\n\
+             disks = [{ path = \"fixtures/spare.img\" }, { path = \"{out}/peios.iso\" }]\n",
+        )
+        .unwrap();
+        let mut cfg = Config::from_toml_str(
+            "[profiles]\nfrom_dir = \"profiles\"\n",
+            &tmp.path().join("provium.toml"),
+        )
+        .unwrap();
+        cfg.expand_build_outputs();
+        let disks = &cfg.profile("medium").unwrap().disks;
+        assert_eq!(disks[0].path, dir.join("fixtures/spare.img"));
+        assert_eq!(disks[1].path, PathBuf::from("/build/medium/peios.iso"));
     }
 
     /// `{out}` is an absolute build directory, so it must survive
