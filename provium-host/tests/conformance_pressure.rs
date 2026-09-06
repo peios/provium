@@ -88,6 +88,7 @@ fn dispatcher_with_pressure_flag_runs_when_unpressured() {
         cmdline: "console=hvc0".into(), guest_os: "peios".into(),
             inject_agent: true,
             agent_overlay_path: None,
+            agent_boot_timeout: None,
             cmdline_file: None,
             build: None,
             build_out: None,

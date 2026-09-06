@@ -686,6 +686,9 @@ impl Vm {
                 opts.initial_time_ns = over.initial_time_ns;
             }
             opts.files.extend(over.files);
+            if over.agent_timeout.is_some() {
+                opts.agent_timeout = over.agent_timeout;
+            }
         }
         // One NIC per bridge attachment, with stable id derived
         // from "<vm_name>-<bridge>" so it's predictable in logs

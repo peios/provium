@@ -1129,10 +1129,41 @@ fn parse_boot_overrides(t: &mlua::Table) -> mlua::Result<crate::vmm::BootOpts> {
             let entry = pair?;
             let path: String = entry.get("path")?;
             let data: mlua::String = entry.get("content")?;
+            let mode = match entry.get::<Value>("mode")? {
+                Value::Nil => crate::vmm::files_cpio::DEFAULT_FILE_MODE,
+                Value::Integer(m) if (0..=0o7777).contains(&m) => m as u32,
+                other => {
+                    return Err(mlua::Error::external(format!(
+                        "boot_opts.files: `mode` for `{path}` must be an integer \
+                         permission mask (e.g. 0x1ed for 0755), got {}",
+                        other.type_name(),
+                    )));
+                }
+            };
             opts.files.push(crate::vmm::InjectedFile {
                 guest_path: std::path::PathBuf::from(path),
                 content: data.as_bytes().to_vec(),
+                mode,
             });
+        }
+        crate::vmm::files_cpio::validate(&opts.files).map_err(mlua::Error::external)?;
+    }
+    match t.get::<Value>("agent_timeout")? {
+        Value::Nil => {}
+        Value::Integer(secs) if secs > 0 => {
+            opts.agent_timeout = Some(std::time::Duration::from_secs(secs as u64));
+        }
+        Value::Number(secs) if secs.is_finite() && secs > 0.0 => {
+            opts.agent_timeout = Some(std::time::Duration::from_secs_f64(secs));
+        }
+        other => {
+            return Err(mlua::Error::external(format!(
+                "boot_opts.agent_timeout: expected a positive number of seconds, got {}",
+                match other {
+                    Value::Integer(_) | Value::Number(_) => "a non-positive number".to_owned(),
+                    v => v.type_name().to_owned(),
+                },
+            )));
         }
     }
     Ok(opts)

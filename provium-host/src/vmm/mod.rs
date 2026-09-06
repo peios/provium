@@ -29,6 +29,7 @@ use thiserror::Error;
 use crate::profile::Profile;
 
 pub mod agent_overlay;
+pub mod files_cpio;
 pub mod qemu;
 
 /// Boot-time runtime configuration for a VM. Mirrors the Lua API's
@@ -46,9 +47,18 @@ pub struct BootOpts {
     /// or `cmdline_override`) — for a test that wants one extra kernel
     /// parameter without restating the profile's line.
     pub cmdline_append: Option<String>,
-    /// Files to inject into the VM at boot — currently unused, slot
-    /// reserved for the slice-2 file-injection mechanism.
+    /// Files to inject into the VM at boot. Packed into a cpio archive
+    /// appended to the initrd after the agent overlay, so the kernel
+    /// unpacks them last and they win over both (see
+    /// [`files_cpio`]). The QEMU backend honours them; the local-agent
+    /// backend has no initrd and ignores them.
     pub files: Vec<InjectedFile>,
+    /// How long to wait for the agent after QMP is up, for this boot
+    /// only. `None` defers to the profile's `agent_boot_timeout`, then
+    /// to the VMM default. A test whose boot is *expected* to end
+    /// without an agent (an init that halts) sets this low so the
+    /// failure it asserts on arrives quickly.
+    pub agent_timeout: Option<std::time::Duration>,
     /// Optional RNG seed for deterministic guest entropy.
     pub rng_seed: Option<u64>,
     /// Optional initial guest wall-clock time in nanoseconds since
@@ -82,6 +92,9 @@ pub struct InjectedFile {
     pub guest_path: PathBuf,
     /// Bytes to write.
     pub content: Vec<u8>,
+    /// Permission bits (`0o644` unless the test says otherwise; a hook
+    /// script wants `0o755`).
+    pub mode: u32,
 }
 
 /// VMM-layer errors.

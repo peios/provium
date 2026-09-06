@@ -162,6 +162,15 @@ pub struct Profile {
     /// relative to the provium workspace for in-development runs.
     #[serde(default)]
     pub agent_overlay_path: Option<PathBuf>,
+    /// How long, in seconds, to wait for the in-VM agent after QEMU
+    /// is up before the boot is declared failed. Unset means the VMM
+    /// default (30 s). A profile whose guest is expected to reach the
+    /// agent in two seconds, and whose tests deliberately boot
+    /// configurations that halt instead, sets this low so those
+    /// failures are reported promptly. `vm:boot({agent_timeout = …})`
+    /// overrides it for one boot.
+    #[serde(default)]
+    pub agent_boot_timeout: Option<f64>,
     /// Optional **build command** that produces this profile's boot
     /// artifacts. Run with `sh -c` from provium's cwd, **once** before
     /// any VM boots, when the profile is used (`provium test`,
@@ -570,6 +579,17 @@ impl Config {
                     ),
                 });
             }
+            if let Some(t) = profile.agent_boot_timeout {
+                if !(t.is_finite() && t > 0.0) {
+                    return Err(ConfigError::Validation {
+                        path: path.into(),
+                        message: format!(
+                            "profile `{name}`: agent_boot_timeout must be a positive \
+                             number of seconds, got {t}"
+                        ),
+                    });
+                }
+            }
             // v1: only the Peios agent port exists. Surface a clear
             // diagnostic rather than booting and watching the agent
             // fail to come up.
@@ -704,6 +724,7 @@ guest_os = "linux"
             guest_os: "peios".into(),
             inject_agent: true,
             agent_overlay_path: None,
+            agent_boot_timeout: None,
             build: None,
             build_out: None,
             dir: None,

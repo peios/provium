@@ -314,7 +314,30 @@ impl QemuVmm {
                 );
             }
         }
-        let initrd_for_qemu = prepared.initrd_path.clone();
+        // 2c. Per-boot file injection. `vm:boot({files = …})` becomes a
+        //     third cpio appended after the profile's initrd and the
+        //     agent overlay, so the kernel unpacks it last and a test's
+        //     file wins over both. Written into this VM's scratch dir —
+        //     the content is per boot, so there is nothing to cache.
+        let initrd_for_qemu = if opts.files.is_empty() {
+            prepared.initrd_path.clone()
+        } else {
+            let path = scratch.join("initrd-with-files.cpio.gz");
+            let mut bytes = if prepared.initrd_path.as_os_str().is_empty() {
+                Vec::new()
+            } else {
+                std::fs::read(&prepared.initrd_path)?
+            };
+            bytes.extend_from_slice(&crate::vmm::files_cpio::build_segment(&opts.files));
+            std::fs::write(&path, bytes)?;
+            if crate::verbosity::is_verbose() {
+                eprintln!(
+                    "provium: vm {name}: {} injected file(s) appended to the initrd",
+                    opts.files.len(),
+                );
+            }
+            path
+        };
         let cmdline = prepared.cmdline.clone();
 
         let plan = QemuLaunchPlan {
@@ -479,7 +502,12 @@ impl QemuVmm {
         // 5. Wait for the in-VM agent to come up.
         let connector = VsockConnector::new(cid, self.config.agent_port);
         let client = AgentClient::new(connector);
-        if let Err(e) = wait_for_agent(&client, self.config.agent_boot_timeout, name) {
+        // The boot's own timeout wins, then the profile's, then ours.
+        let agent_timeout = opts
+            .agent_timeout
+            .or_else(|| profile.agent_boot_timeout.map(Duration::from_secs_f64))
+            .unwrap_or(self.config.agent_boot_timeout);
+        if let Err(e) = wait_for_agent(&client, agent_timeout, name) {
             // Read the tail of the kernel console BEFORE wiping the
             // scratch dir — without this, the only thing the user
             // sees is "agent did not come up within 30s" with zero
@@ -490,10 +518,7 @@ impl QemuVmm {
             let _ = qmp.quit();
             let _ = kill_child(&child);
             let _ = std::fs::remove_dir_all(&scratch);
-            let mut msg = format!(
-                "agent did not come up within {:?}: {e}",
-                self.config.agent_boot_timeout,
-            );
+            let mut msg = format!("agent did not come up within {agent_timeout:?}: {e}");
             if let Some(tail) = console_tail {
                 msg.push_str("\n--- guest console (last bytes) ---\n");
                 msg.push_str(&tail);
@@ -1483,6 +1508,7 @@ mod tests {
             guest_os: "peios".into(),
             inject_agent: true,
             agent_overlay_path: None,
+            agent_boot_timeout: None,
             cmdline_file: None,
             build: None,
             build_out: None,
@@ -1510,6 +1536,7 @@ mod tests {
             guest_os: "peios".into(),
             inject_agent: true,
             agent_overlay_path: None,
+            agent_boot_timeout: None,
             cmdline_file: None,
             build: None,
             build_out: None,

@@ -137,6 +137,7 @@ mod tests {
             guest_os: "peios".into(),
             inject_agent: true,
             agent_overlay_path: None,
+            agent_boot_timeout: None,
             build: build.map(str::to_owned),
             build_out,
             dir: None,
