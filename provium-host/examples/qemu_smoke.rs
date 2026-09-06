@@ -173,6 +173,7 @@ fn build_config(args: &CliArgs) -> Arc<Config> {
             guest_os: "peios".into(),
             inject_agent: true,
             agent_overlay_path: None,
+            agent_boot_timeout: None,
             cmdline_file: None,
             build: None,
             build_out: None,
