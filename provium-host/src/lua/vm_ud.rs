@@ -1148,6 +1148,47 @@ fn parse_boot_overrides(t: &mlua::Table) -> mlua::Result<crate::vmm::BootOpts> {
         }
         crate::vmm::files_cpio::validate(&opts.files).map_err(mlua::Error::external)?;
     }
+    // Per-boot disks. The profile's own come first at launch, so these
+    // land after them: a test's disk is /dev/vdb when the profile
+    // already attached a medium at /dev/vda.
+    if let Ok(disks_tbl) = t.get::<mlua::Table>("disks") {
+        for (i, pair) in disks_tbl.sequence_values::<mlua::Table>().enumerate() {
+            let entry = pair?;
+            let path: String = entry.get("path")?;
+            if path.is_empty() {
+                return Err(mlua::Error::external(
+                    "boot_opts.disks: `path` must not be empty",
+                ));
+            }
+            // Named `boot<N>` rather than `disk<N>` so an unnamed boot
+            // disk can never collide with an unnamed profile one.
+            let id = match entry.get::<Value>("id")? {
+                Value::Nil => format!("boot{i}"),
+                Value::String(s) => s.to_str()?.to_owned(),
+                other => {
+                    return Err(mlua::Error::external(format!(
+                        "boot_opts.disks: `id` must be a string, got {}",
+                        other.type_name(),
+                    )));
+                }
+            };
+            let readonly = match entry.get::<Value>("readonly")? {
+                Value::Nil => false,
+                Value::Boolean(b) => b,
+                other => {
+                    return Err(mlua::Error::external(format!(
+                        "boot_opts.disks: `readonly` for `{id}` must be a boolean, got {}",
+                        other.type_name(),
+                    )));
+                }
+            };
+            opts.disks.push(crate::vmm::AttachedDisk {
+                id,
+                path: std::path::PathBuf::from(path),
+                readonly,
+            });
+        }
+    }
     match t.get::<Value>("agent_timeout")? {
         Value::Nil => {}
         Value::Integer(secs) if secs > 0 => {

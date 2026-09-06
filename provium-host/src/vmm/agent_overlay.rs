@@ -235,6 +235,7 @@ mod tests {
             inject_agent: inject,
             agent_overlay_path: None,
             agent_boot_timeout: None,
+            disks: Vec::new(),
             cmdline_file: None,
             build: None,
             build_out: None,
