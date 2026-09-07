@@ -94,6 +94,19 @@ pub enum VmError {
         total: crate::scheduler::ResourceAmount,
     },
 
+    /// `vm:boot()` could not reserve for the VM, for a reason that
+    /// is the test file's to fix rather than the host's: the boot is
+    /// past the file's `provium:claim`, or reserving it would have
+    /// deadlocked the run because the file holds VMs while it waits
+    /// for more. The reason names the remedy.
+    #[error("vm `{vm}`: cannot boot: {reason}")]
+    BootRefused {
+        /// VM name.
+        vm: String,
+        /// Rendered [`crate::scheduler::ReserveError`].
+        reason: String,
+    },
+
     /// `vm:snapshot` (or `lab:snapshot`) was called while resources
     /// owned by this VM were still open. Per `DESIGN.md` § Snapshot
     /// precondition, snapshotting silently while streams are
@@ -244,17 +257,23 @@ pub struct Vm {
     /// `lab:boot` clears this on each member so the lab's atomic
     /// reservation isn't double-counted.
     pool: Option<Arc<crate::scheduler::Pool>>,
+    /// The file this VM belongs to, as the pool sees it. A boot
+    /// draws from the file's claim when it has one, and is otherwise
+    /// a pool reservation in the file's name. `None` for VMs made
+    /// outside any lab.
+    account: Option<Arc<crate::scheduler::Account>>,
 }
 
 struct VmInner {
     state: VmState,
     /// `None` until `boot` succeeds; cleared by `shutdown`.
     running: Option<VmRunningResources>,
-    /// Pool reservation held for the lifetime of this VM. Released
-    /// on shutdown via Drop. `None` for VMs created without a pool
-    /// (REPL / ad-hoc) or for VMs booted as part of an atomic
-    /// `lab:boot` (the lab holds the joint reservation).
-    boot_reservation: Option<crate::scheduler::Reservation>,
+    /// What the boot holds for the lifetime of this VM — a slice of
+    /// the file's claim or a pool reservation. Released on shutdown
+    /// via Drop. `None` for VMs created without a pool (REPL /
+    /// ad-hoc) or for VMs booted as part of an atomic `lab:boot`
+    /// (the lab holds the joint reservation).
+    boot_reservation: Option<crate::scheduler::Hold>,
     /// Bridges this VM is attached to. Recorded by
     /// `bridge:attach(vm)` and consumed at boot time. Map keys are
     /// bridge names; values hold the [`crate::bridge::Bridge`] handle
@@ -437,6 +456,7 @@ impl Clone for Vm {
             inner: Arc::clone(&self.inner),
             resources: Arc::clone(&self.resources),
             pool: self.pool.clone(),
+            account: self.account.clone(),
         }
     }
 }
@@ -471,6 +491,7 @@ impl Vm {
             })),
             resources: Arc::new(Mutex::new(ResourceRegistry::default())),
             pool: None,
+            account: None,
         }
     }
 
@@ -510,6 +531,7 @@ impl Vm {
             inner: Arc::new(Mutex::new(inner)),
             resources: Arc::new(Mutex::new(ResourceRegistry::default())),
             pool: None,
+            account: None,
         }
     }
 
@@ -518,6 +540,14 @@ impl Vm {
     /// reservation isn't double-counted.
     pub fn with_pool(mut self, pool: Option<Arc<crate::scheduler::Pool>>) -> Self {
         self.pool = pool;
+        self
+    }
+
+    /// Attach the file's account, so a boot draws from the file's
+    /// claim and is attributed to the file. Set by
+    /// [`crate::lab::Lab::create_vm`].
+    pub fn with_account(mut self, account: Option<Arc<crate::scheduler::Account>>) -> Self {
+        self.account = account;
         self
     }
 
@@ -568,6 +598,9 @@ impl Vm {
         }
         if !overrides.disks.is_empty() {
             cur.disks.extend(overrides.disks);
+        }
+        if overrides.agent_timeout.is_some() {
+            cur.agent_timeout = overrides.agent_timeout;
         }
         Ok(())
     }
@@ -722,10 +755,12 @@ impl Vm {
         }
 
         // Per `DESIGN.md` § Scheduler / Per-VM overhead: solo boot
-        // reserves declared memory + ~100 MiB VMM overhead + cpus
-        // from the pool. `lab:boot()` clears `self.pool` on each
-        // member before launch so the lab's atomic claim isn't
-        // double-counted here.
+        // reserves declared memory + ~100 MiB VMM overhead + cpus.
+        // The reservation is a slice of the file's claim when the
+        // file has one, and otherwise a pool reservation in the
+        // file's name — see [`crate::scheduler::reserve`]. `lab:boot()`
+        // clears `self.pool` on each member before launch so the
+        // lab's joint reservation isn't double-counted here.
         let reservation = if let Some(pool) = &self.pool {
             let amount = crate::scheduler::ResourceAmount {
                 memory_bytes: opts
@@ -734,22 +769,31 @@ impl Vm {
                     .saturating_add(VMM_OVERHEAD_BYTES),
                 cpus: opts.cpus.unwrap_or(0),
             };
-            if amount.memory_bytes > 0 || amount.cpus > 0 {
-                match pool.acquire(amount) {
-                    Some(r) => Some(r),
-                    None => {
-                        // Per `DESIGN.md` § Failure mode catalogue:
-                        // boot > host budget → fail test (impossible
-                        // to satisfy).
+            if amount.is_zero() {
+                None
+            } else {
+                use crate::scheduler::{AcquireError, ReserveError};
+                match crate::scheduler::reserve(pool, self.account.as_ref(), amount) {
+                    Ok(hold) => Some(hold),
+                    // Per `DESIGN.md` § Failure mode catalogue: boot >
+                    // host budget → fail test (impossible to satisfy).
+                    Err(ReserveError::Pool(AcquireError::ExceedsTotal { requested, total })) => {
                         return Err(VmError::PoolExceeded {
                             vm: self.name.clone(),
-                            requested: amount,
-                            total: pool.total(),
+                            requested,
+                            total,
+                        });
+                    }
+                    // Past the file's claim, or a proven deadlock:
+                    // both are the file's declaration to fix, and
+                    // the message says how.
+                    Err(e) => {
+                        return Err(VmError::BootRefused {
+                            vm: self.name.clone(),
+                            reason: e.to_string(),
                         });
                     }
                 }
-            } else {
-                None
             }
         } else {
             None
@@ -2545,5 +2589,60 @@ impl StatMeta {
             entry_type: m.entry_type,
             perm: m.perm,
         }
+    }
+}
+
+#[cfg(all(test, feature = "local-agent"))]
+mod boot_override_tests {
+    use super::*;
+
+    fn created_vm() -> Vm {
+        let profile = Profile {
+            kernel: "/unused".into(),
+            initrd: "/unused".into(),
+            root: None,
+            cmdline: "console=hvc0".into(),
+            guest_os: "peios".into(),
+            inject_agent: true,
+            agent_overlay_path: None,
+            agent_boot_timeout: None,
+            disks: Vec::new(),
+            cmdline_file: None,
+            build: None,
+            build_out: None,
+            dir: None,
+        };
+        Vm::new(
+            "v".to_owned(),
+            "peios".to_owned(),
+            profile,
+            BootOpts::default(),
+            Arc::new(crate::vmm::local_agent::LocalAgentVmm::new()),
+        )
+    }
+
+    /// `vm:boot({agent_timeout = N})` must reach the launch. It used to
+    /// be the one override `merge_boot_opts` dropped, so a boot that was
+    /// meant to give up on its agent in seconds waited out the profile's
+    /// timeout instead.
+    #[test]
+    fn a_boot_level_agent_timeout_is_kept_by_the_merge() {
+        let vm = created_vm();
+        let twelve = std::time::Duration::from_secs(12);
+        vm.merge_boot_opts(BootOpts {
+            agent_timeout: Some(twelve),
+            ..BootOpts::default()
+        })
+        .unwrap();
+        // A later merge that says nothing about it leaves it alone.
+        vm.merge_boot_opts(BootOpts {
+            rng_seed: Some(7),
+            ..BootOpts::default()
+        })
+        .unwrap();
+        let inner = vm.inner.lock().unwrap();
+        let over = inner.boot_overrides.as_ref().expect("overrides recorded");
+        assert_eq!(over.agent_timeout, Some(twelve));
+        assert_eq!(over.rng_seed, Some(7));
     }
 }

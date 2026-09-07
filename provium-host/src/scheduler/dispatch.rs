@@ -44,7 +44,7 @@ use crate::lab::Lab;
 use crate::lua::{run_file_full, FileOutcome};
 use crate::profile::Config;
 use crate::scheduler::events::{EventSink, NullSink};
-use crate::scheduler::pool::{Pool, ResourceAmount};
+use crate::scheduler::pool::{AcquireError, Pool, ResourceAmount, WaitSink};
 use crate::scheduler::psi::PressureFlag;
 use crate::vmm::Vmm;
 
@@ -182,9 +182,23 @@ pub fn dispatch_files_with_progress<F>(
 where
     F: Fn(&DispatchedFile) + Send + Sync + 'static,
 {
-    // Spawn a thread per file. They block on pool.acquire so the
-    // effective concurrency is bounded by the pool's CPU/memory
-    // budget plus per_file_overhead.
+    // Spawn a thread per file. Each blocks on pool.acquire for its
+    // own `per_file_overhead`, so *file* concurrency is bounded by
+    // whichever dimension that overhead charges — memory only, since
+    // its cpus are zero. What a file's VMs need comes later: at its
+    // `provium:claim`, which reserves the file's whole VM budget in
+    // one go, or failing that at each `vm:boot()`.
+    //
+    // A file may therefore be dispatched long before there is room
+    // for its VMs, and queue inside the pool while its watchdog runs.
+    // That queueing is excused from the deadline (see `run_one_file`).
+    // What is NOT fine is a file reserving per boot: it holds its
+    // first VM while it waits for its second, and enough files doing
+    // that at once hold the whole CPU budget between them while every
+    // one of them waits — a deadlock only the watchdogs broke, which
+    // is what PEI-810 was. The pool now proves that case and fails the
+    // boot that closes the cycle, with a message naming the claim as
+    // the remedy; a claimed file never reserves per boot at all.
     //
     // `--fail-fast`: a shared flag is flipped by the first failing
     // runner. New files entering run_one_file see the flag set and
@@ -256,10 +270,28 @@ fn run_one_file(
         }
     }
 
-    // 1. Pool reservation. Held until the dispatched-file goes out
+    // 1. Per-file lab — the watchdog needs a clone to tear down.
+    //    Wired with the run's event sink so fixture resumes emit
+    //    `vm_spawned` (the sink is inherited by sub-labs + the
+    //    per-test scope labs). Made before the overhead reservation
+    //    because the lab's account mints the owner that reservation,
+    //    and every boot in the file after it, is attributed to.
+    let root_lab = Lab::new_with_pool_and_events(
+        "provium",
+        Arc::clone(&config),
+        Arc::clone(&vmm),
+        Some(Arc::clone(&pool)),
+        Arc::clone(&opts.events),
+    );
+    let owner = root_lab
+        .account()
+        .owner()
+        .expect("a lab built with a pool has an owner");
+
+    // 2. Pool reservation. Held until the dispatched-file goes out
     //    of scope at function end (RAII). If `try_acquire` would
     //    block, emit a file_blocked event first.
-    let reservation = match pool.try_acquire(opts.per_file_overhead) {
+    let reservation = match pool.try_acquire_for(owner, opts.per_file_overhead) {
         Some(r) => r,
         None => {
             opts.events.emit(Event::FileBlocked(FileBlocked {
@@ -270,19 +302,23 @@ fn run_one_file(
                 },
                 reason: "pool_full".into(),
             }));
-            match pool.acquire(opts.per_file_overhead) {
-                Some(r) => r,
-                None => {
+            match pool.acquire_for(owner, opts.per_file_overhead) {
+                Ok(r) => r,
+                Err(e) => {
+                    let chunk_error = match e {
+                        AcquireError::ExceedsTotal { requested, total } => format!(
+                            "per-file overhead {requested:?} exceeds total pool budget {total:?}"
+                        ),
+                        AcquireError::Deadlock(_) => {
+                            format!("per-file overhead cannot be reserved: {e}")
+                        }
+                    };
                     return DispatchedFile {
                         path: path.clone(),
                         timeout: FileTimeoutOutcome::InTime,
                         outcome: FileOutcome {
                             path,
-                            chunk_error: Some(format!(
-                                "per-file overhead {:?} exceeds total pool budget {:?}",
-                                opts.per_file_overhead,
-                                pool.total(),
-                            )),
+                            chunk_error: Some(chunk_error),
                             tests: Vec::new(),
                         },
                     };
@@ -292,30 +328,35 @@ fn run_one_file(
     };
     let _hold = reservation; // explicit name for clarity
 
-    // 2. Per-file lab — the watchdog needs a clone to tear down.
-    //    Wired with the run's event sink so fixture resumes emit
-    //    `vm_spawned` (the sink is inherited by sub-labs + the
-    //    per-test scope labs).
-    let root_lab = Lab::new_with_pool_and_events(
-        "provium",
-        Arc::clone(&config),
-        Arc::clone(&vmm),
-        Some(Arc::clone(&pool)),
-        Arc::clone(&opts.events),
-    );
-
     // 3. Watchdog (if enabled).
+    //
+    // The deadline is a budget for the file's own work, not for the
+    // wall clock. `waits` accumulates the time this file's thread
+    // spends parked in the pool — at its claim, or at a boot — and the
+    // deadline moves out by exactly that much, a wait still in
+    // progress included.
+    //
+    // Without the adjustment a file is killed for queueing: the
+    // watchdog starts at dispatch, the claim blocks on the pool inside
+    // that window, and when it fires `lab.shutdown()` marks VMs the
+    // file has not booted yet, so the next `vm:boot()` fails the state
+    // guard with "VM is shutdown; create a new one".
     let completed = Arc::new(AtomicBool::new(false));
+    let waits = WaitSink::new();
     let watchdog = match opts.timeout {
         FileTimeout::Disabled => None,
         FileTimeout::Wall(timeout) => {
             let completed = Arc::clone(&completed);
+            let waits = Arc::clone(&waits);
             let lab = root_lab.clone();
             Some(thread::spawn(move || {
-                let deadline = Instant::now() + timeout;
-                while Instant::now() < deadline {
+                let started = Instant::now();
+                loop {
                     if completed.load(Ordering::SeqCst) {
                         return false;
+                    }
+                    if started.elapsed() >= timeout.saturating_add(waits.waited()) {
+                        break;
                     }
                     thread::sleep(Duration::from_millis(50));
                 }
@@ -342,11 +383,17 @@ fn run_one_file(
     }));
 
     // 4. Run the file, catching panics.
+    //
+    // The wait sink is installed on THIS thread, which is the one the
+    // file's Lua chunk and therefore every `vm:boot()` runs on, so the
+    // pool records its waits against this file's counter and no other.
+    // The guard clears it however the file ends, panic included.
     let path_clone = path.clone();
     let lab_clone = root_lab.clone();
     let sink_for_runner = Arc::clone(&opts.events);
     let pool_for_runner = Arc::clone(&pool);
     let result = catch_unwind(AssertUnwindSafe(|| {
+        let _wait_sink = crate::scheduler::install_wait_sink(Arc::clone(&waits));
         run_file_full(
             &path_clone,
             config,

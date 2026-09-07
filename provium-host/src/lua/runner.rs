@@ -402,11 +402,27 @@ pub fn run_file_full(
             let lab = root_lab.clone();
             let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let stop_for_thread = Arc::clone(&stop);
+            // Same adjustment as the file watchdog in
+            // `scheduler::dispatch`: a test's deadline is a budget for
+            // its own work, so time its thread spends parked in the
+            // pool waiting for a VM slot does not count against it.
+            // Read here, on the file's thread, because the sink is
+            // thread-local and the watchdog runs elsewhere.
+            //
+            // This matters more than the file watchdog does, because
+            // `lab.shutdown()` takes down EVERY VM in the file rather
+            // than the test's own — so one test killed for queueing
+            // leaves the rest of the file with no VMs (PEI-810).
+            let waits = crate::scheduler::current_wait_sink();
             let h = std::thread::spawn(move || {
-                let deadline = Instant::now() + d;
-                while Instant::now() < deadline {
+                let started = Instant::now();
+                loop {
                     if stop_for_thread.load(std::sync::atomic::Ordering::SeqCst) {
                         return false;
+                    }
+                    let waited = waits.as_ref().map(|w| w.waited()).unwrap_or_default();
+                    if started.elapsed() >= d.saturating_add(waited) {
+                        break;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
@@ -443,13 +459,17 @@ pub fn run_file_full(
         let original_provium: mlua::Value = lua.globals().get("provium")?;
         // Event sink wired through so a `vm_fixture(...)` resumed
         // inside this test emits `vm_spawned` (via `Lab::restore_vm`).
+        // The scope shares the file's account: a VM booted inside a
+        // test draws from the file's claim, and is the file's as far
+        // as the pool's deadlock accounting is concerned.
         let test_scope_lab = crate::lab::Lab::new_with_pool_and_events(
             format!("test:{name}"),
             Arc::clone(&config),
             Arc::clone(&vmm),
             pool.clone(),
             Arc::clone(&sink),
-        );
+        )
+        .with_account(Arc::clone(root_lab.account()));
         let scope_ctx = LuaContext {
             config: Arc::clone(&config),
             vmm: Arc::clone(&vmm),

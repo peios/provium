@@ -71,6 +71,17 @@ pub enum LabError {
     #[error("lab claim exceeds total pool budget")]
     ClaimExceedsBudget,
 
+    /// The pool refused the claim for a reason other than size: it
+    /// proved that parking the request would deadlock the run.
+    #[error("lab claim refused: {0}")]
+    ClaimRefused(String),
+
+    /// `lab:boot()` could not reserve for its members — the joint
+    /// request is over the pool, past the file's claim, or would
+    /// deadlock the run.
+    #[error("lab boot cannot reserve for its members: {0}")]
+    BootRefused(String),
+
     /// Caller used a name reserved for the dot-access surface
     /// (`vm_fixture` / `lab_fixture` / `pack` / `unpack`) per
     /// `DESIGN.md` § Lab dot-access. Allowing them would shadow
@@ -112,6 +123,12 @@ pub struct Lab {
     /// reservation. `None` for ad-hoc / REPL labs that don't
     /// share a global pool.
     pool: Option<Arc<crate::scheduler::Pool>>,
+    /// The file's standing with the pool: the owner its reservations
+    /// are attributed to and, once `lab:claim` has run, its claim.
+    /// One per file — sub-labs and per-test scopes share the root's,
+    /// so every VM in the file draws from the same claim and the pool
+    /// can tell the file's holdings from another's.
+    account: Arc<crate::scheduler::Account>,
     /// Event sink for VM-lifecycle telemetry. [`Self::restore_vm`]
     /// emits `vm_spawned` through it so fixture resumes — including
     /// `lab_restore`'s parallel restores — show up on the event
@@ -124,14 +141,6 @@ struct LabInner {
     vms: BTreeMap<String, Vm>,
     sub_labs: BTreeMap<String, Lab>,
     bridges: BTreeMap<String, Bridge>,
-    /// Active file-scope reservation from the scheduler's pool.
-    /// Held for the file's lifetime; one-shot per lab per the
-    /// design.
-    claim: Option<crate::scheduler::Reservation>,
-    /// `true` once `lab:claim(...)` has been called, even when no
-    /// pool was wired. Enforces the design's "one-shot per file"
-    /// rule for REPL/ad-hoc paths that lack a pool.
-    claim_taken: bool,
     /// Named barriers — re-entrant, identified by string name.
     barriers: BTreeMap<String, std::sync::Arc<BarrierState>>,
     /// Joint pool reservation held while `lab:boot()`-launched VMs
@@ -146,7 +155,7 @@ struct LabInner {
     /// reserves an *additional* slot for the newcomers without
     /// invalidating the existing one. All entries are released
     /// at `lab:shutdown()`.
-    boot_reservations: Vec<crate::scheduler::Reservation>,
+    boot_reservations: Vec<crate::scheduler::Hold>,
 }
 
 /// State for a [`Lab::barrier`] rendezvous.
@@ -339,6 +348,7 @@ impl Clone for Lab {
             config: Arc::clone(&self.config),
             vmm: Arc::clone(&self.vmm),
             pool: self.pool.clone(),
+            account: Arc::clone(&self.account),
             events: Arc::clone(&self.events),
         }
     }
@@ -381,15 +391,15 @@ impl Lab {
         pool: Option<Arc<crate::scheduler::Pool>>,
         events: Arc<dyn EventSink>,
     ) -> Self {
+        let account = crate::scheduler::Account::new(pool.as_ref());
         Self {
             name: name.into(),
             pool,
+            account,
             inner: Arc::new(Mutex::new(LabInner {
                 vms: BTreeMap::new(),
                 sub_labs: BTreeMap::new(),
                 bridges: BTreeMap::new(),
-                claim: None,
-                claim_taken: false,
                 barriers: BTreeMap::new(),
                 boot_reservations: Vec::new(),
             })),
@@ -397,6 +407,21 @@ impl Lab {
             vmm,
             events,
         }
+    }
+
+    /// Share another lab's account — the per-test scope labs the
+    /// runner creates are part of the same file as the root lab, so
+    /// their VMs must draw from the file's claim and be attributed to
+    /// the file's owner. Sub-labs made through [`Self::sub_lab`]
+    /// inherit it without being asked.
+    pub fn with_account(mut self, account: Arc<crate::scheduler::Account>) -> Self {
+        self.account = account;
+        self
+    }
+
+    /// The file's account with the pool.
+    pub fn account(&self) -> &Arc<crate::scheduler::Account> {
+        &self.account
     }
 
     /// Declare a new bridge under this lab.
@@ -865,23 +890,40 @@ impl Lab {
     // pool when present, no-op otherwise.
     // -----------------------------------------------------------------
 
-    /// Take a file-level reservation against `pool`. Idempotent
-    /// per-Lab: a second `claim` call returns
+    /// Take the file's claim against `pool`. One-shot per file: a
+    /// second `claim` call, from any lab in the file, returns
     /// [`LabError::ClaimAlreadyHeld`].
+    ///
+    /// The claim is the file's whole VM budget from here on — every
+    /// boot in the file draws from it and leaves the pool alone, so
+    /// the file never queues again once this returns. That is the
+    /// point: a file that reserves per boot holds its first VM while
+    /// it waits for its second, and enough files doing that at once
+    /// deadlock the run (PEI-810).
     pub fn claim(
         &self,
         pool: &std::sync::Arc<crate::scheduler::Pool>,
         amount: crate::scheduler::ResourceAmount,
     ) -> Result<(), LabError> {
-        let mut inner = self.inner.lock().unwrap();
-        if inner.claim_taken {
+        if self.account.claim_taken() {
             return Err(LabError::ClaimAlreadyHeld);
         }
-        let reservation = pool
-            .acquire(amount)
-            .ok_or(LabError::ClaimExceedsBudget)?;
-        inner.claim = Some(reservation);
-        inner.claim_taken = true;
+        let reservation = match self.account.owner() {
+            Some(owner) => pool.acquire_for(owner, amount).map_err(|e| match e {
+                crate::scheduler::AcquireError::ExceedsTotal { .. } => {
+                    LabError::ClaimExceedsBudget
+                }
+                deadlock @ crate::scheduler::AcquireError::Deadlock(_) => {
+                    LabError::ClaimRefused(deadlock.to_string())
+                }
+            })?,
+            // A lab built without a pool and handed one only now:
+            // nothing to attribute to, so reserve anonymously.
+            None => pool.acquire(amount).ok_or(LabError::ClaimExceedsBudget)?,
+        };
+        if !self.account.set_claim(reservation, amount) {
+            return Err(LabError::ClaimAlreadyHeld);
+        }
         Ok(())
     }
 
@@ -890,21 +932,19 @@ impl Lab {
     /// tests) so the design's "one-shot per file" rule is enforced
     /// regardless.
     pub fn note_claim_taken(&self) -> Result<(), LabError> {
-        let mut inner = self.inner.lock().unwrap();
-        if inner.claim_taken {
-            return Err(LabError::ClaimAlreadyHeld);
+        if self.account.mark_claim_taken() {
+            Ok(())
+        } else {
+            Err(LabError::ClaimAlreadyHeld)
         }
-        inner.claim_taken = true;
-        Ok(())
     }
 
-    /// Drop the active claim. Returns the reserved
+    /// Give the file's claim back to the pool. Returns its
     /// [`crate::scheduler::ResourceAmount`] so the caller can emit a
     /// `claim_released` event without having to track it separately.
     /// Returns `None` when no claim was held.
     pub fn release_claim(&self) -> Option<crate::scheduler::ResourceAmount> {
-        let r = self.inner.lock().unwrap().claim.take();
-        r.map(|res| res.amount())
+        self.account.release_claim()
     }
 
     // -----------------------------------------------------------------
@@ -961,7 +1001,8 @@ impl Lab {
             opts,
             Arc::clone(&self.vmm),
         )
-        .with_pool(self.pool.clone());
+        .with_pool(self.pool.clone())
+        .with_account(Some(Arc::clone(&self.account)));
 
         let mut inner = self.inner.lock().unwrap();
         if inner.vms.contains_key(&name) {
@@ -1088,16 +1129,18 @@ impl Lab {
     pub fn sub_lab(&self, name: impl Into<String>) -> Lab {
         let name = name.into();
         // Inherit the parent's event sink so VMs restored anywhere
-        // in the lab tree surface `vm_spawned` on the same stream.
-        // Pool stays `None` as before — sub-lab VM pool accounting
-        // is unchanged by this.
+        // in the lab tree surface `vm_spawned` on the same stream,
+        // and the parent's account so the sub-lab is the same file
+        // as far as the pool is concerned. Pool stays `None` as
+        // before — sub-lab VM pool accounting is unchanged by this.
         let lab = Lab::new_with_pool_and_events(
             name.clone(),
             Arc::clone(&self.config),
             Arc::clone(&self.vmm),
             None,
             Arc::clone(&self.events),
-        );
+        )
+        .with_account(Arc::clone(&self.account));
         self.inner
             .lock()
             .unwrap()
@@ -1191,11 +1234,21 @@ impl Lab {
         // (their solo-boot pool ref is cleared below to avoid
         // double-charge). `Lab::shutdown` releases the
         // reservation when the lab tears down.
+        //
+        // The reservation comes from the file's claim when it has
+        // one, otherwise from the pool in the file's name — the same
+        // choice a solo `vm:boot()` makes, see
+        // [`crate::scheduler::reserve`]. A refusal (over the pool,
+        // past the claim, or a proven deadlock) fails the boot
+        // rather than launching the members unaccounted for.
         let atomic_hold = if let Some(pool) = pool {
-            if needed.memory_bytes > 0 || needed.cpus > 0 {
-                pool.acquire(needed)
-            } else {
+            if needed.is_zero() {
                 None
+            } else {
+                Some(
+                    crate::scheduler::reserve(pool, Some(&self.account), needed)
+                        .map_err(|e| LabError::BootRefused(e.to_string()))?,
+                )
             }
         } else {
             None
