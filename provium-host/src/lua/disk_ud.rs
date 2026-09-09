@@ -1,9 +1,9 @@
-//! Disk userdata. Hypervisor-side disk ops (read_sectors,
-//! write_sectors, fault_inject) are slice-11.6 territory — they
-//! need QMP block-backend integration. This stub records the API
-//! shape so test code can call the methods without erroring; calls
-//! return either default values or `Unimplemented` errors that the
-//! 11.6 implementation will replace.
+//! Disk userdata. Sector reads and writes go straight to the backing
+//! image on the host, and fault injection acts on that path; `detach`
+//! is the one op that reaches QEMU, as a best-effort `device_del`.
+//! Nothing here adds a device to a running guest: `vm:attach_disk`
+//! records a host-side attachment only, and a disk the guest should
+//! see is declared at boot (the profile's `disks` or `vm:boot({disks})`).
 
 use std::sync::{Arc, Mutex};
 

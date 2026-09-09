@@ -2105,8 +2105,11 @@ impl Worker {
         }
     }
 
-    /// Open a file under this worker. File handle lives in the
-    /// worker's `AgentState`.
+    /// Send `worker_open_file` for this worker. The agent rejects it
+    /// (`BadRequest`: a process-isolated worker's file table is not the
+    /// parent's), so this always returns that error; the Lua binding
+    /// refuses the call before reaching here. Kept as the typed client
+    /// for the wire op so conformance tests can exercise the rejection.
     pub fn open_file(
         &self,
         path: impl Into<String>,
