@@ -1476,15 +1476,32 @@ fn print_summary(
     let mut p = 0;
     let mut f = 0;
     let mut s = 0;
+    // Files that never produced test results: a chunk error (the Lua
+    // failed to load, a VM did not boot, the runner panicked) or a
+    // timeout. Their tests count nowhere above, so without this a run in
+    // which every file crashed reads "0 passed, 0 failed" — exactly the
+    // line a run with nothing to do prints. Only the exit code told them
+    // apart.
+    let mut errored = 0;
     for r in results {
         files += 1;
         let (pp, ff, ss) = r.outcome.summary();
         p += pp;
         f += ff;
         s += ss;
+        if r.outcome.chunk_error.is_some()
+            || r.timeout == provium_host::scheduler::FileTimeoutOutcome::TimedOut
+        {
+            errored += 1;
+        }
     }
+    let errored_part = if errored > 0 {
+        format!(", {errored} file(s) errored")
+    } else {
+        String::new()
+    };
     let line = format!(
-        "\n{files} file(s); {p} passed, {f} failed, {s} skipped; {:.2}s",
+        "\n{files} file(s); {p} passed, {f} failed, {s} skipped{errored_part}; {:.2}s",
         elapsed.as_secs_f64()
     );
     if to_stderr {
