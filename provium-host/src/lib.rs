@@ -16,7 +16,8 @@
 //! * [`agent_client`] — typed wrappers for every short op + a
 //!   streaming `tail_file` client.
 //! * [`vmm`] — the [`vmm::Vmm`] trait per `DESIGN.md` Architecture §;
-//!   the QEMU implementation is stubbed for slice 2.
+//!   `vmm::qemu::QemuVmm` is the production implementation and
+//!   `vmm::local_agent::LocalAgentVmm` the in-process one tests use.
 //!
 //! Tests live under `tests/` and drive the agent client against a
 //! real `provium-agent` running on the host (via `UnixStream::pair`),

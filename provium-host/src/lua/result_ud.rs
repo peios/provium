@@ -898,16 +898,14 @@ impl UserData for WorkerUd {
             let result = this.worker.run(exec).map_err(mlua::Error::external)?;
             wrap_run_result(lua, result)
         });
-        // Worker:run_async / open_file / syscall / etc.
+        // Worker:run_async / syscall / kill / join.
         //
         // Routing model: worker ops dispatch through the parent VM's
-        // agent client (same vsock CID + port). Process and file
-        // handles allocated under a worker live in the worker's
-        // [`AgentState`] subnamespace on the agent side; on the host
-        // side, the resulting handles are wrapped in [`Process`] /
-        // [`crate::lua::file_ud::FileUd`] tied to the parent VM —
-        // the difference is invisible to test code, which is the
-        // intent of the "same VM API" design line.
+        // agent client (same vsock CID + port) and the agent relays
+        // them to the worker's sub-agent process. A process spawned
+        // there is registered under the worker and wrapped in
+        // [`Process`] tied to the parent VM, so test code sees the
+        // "same VM API". Files are the exception — see `open_file`.
         methods.add_method("run_async", |lua, this, args: mlua::Variadic<Value>| {
             let exec = super::vm_ud::build_exec_args_public(&args)
                 .map_err(mlua::Error::external)?;
@@ -934,28 +932,22 @@ impl UserData for WorkerUd {
             // past the test boundary.
             register_resource(lua, ProcessUd::wrap(proc), "proc")
         });
+        // Rejected here, before any wire traffic, with the same reason
+        // the agent gives: a worker is a separate process with its own
+        // file table, so a descriptor opened there would be out of
+        // reach of the parent-scoped file:read/write/close. Kept as a
+        // method so the caller gets the reason and the alternative
+        // rather than "attempt to call a nil value".
         methods.add_method(
             "open_file",
-            |lua, this, (path, mode): (String, mlua::Table)| {
-                let mode_value =
-                    super::vm_ud::open_mode_from_table_public(&mode)?;
-                let h = this
-                    .worker
-                    .open_file(path.clone(), mode_value)
-                    .map_err(mlua::Error::external)?;
-                // Register so the scope walker auto-closes this
-                // file at scope end. Mirrors vm:open_file's
-                // resource-registry hook — without it, a
-                // worker-opened file leaks past the test.
-                register_resource(
-                    lua,
-                    super::file_ud::FileUd::wrap_with_path(
-                        this.worker.parent_vm().clone(),
-                        h,
-                        path,
-                    ),
-                    "file",
-                )
+            |_, this, (path, _mode): (String, mlua::Table)| -> mlua::Result<Value> {
+                Err(mlua::Error::external(format!(
+                    "worker:open_file(\"{path}\"): not supported for a process-isolated \
+                     worker (its file table is not the parent agent's); open it inside the \
+                     worker with worker:syscall(openat, …), or use vm:open_file on vm `{}` \
+                     when the worker's credentials do not matter",
+                    this.worker.parent_vm().name()
+                )))
             },
         );
         // Mirror vm:syscall — DESIGN guarantees workers expose the

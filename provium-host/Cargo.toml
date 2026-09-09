@@ -17,17 +17,20 @@ path = "src/bin/provium.rs"
 required-features = ["lua", "local-agent"]
 
 [features]
-default = []
-# Enable [`vmm::local_agent::LocalAgentVmm`] — a slice-2 reference VMM
-# that "boots" by spawning a `provium-agent` connection handler on a
-# `UnixStream::pair()` instead of a real QEMU process. Useful for the
-# Lua test driver during slice 2 (no KVM required) and for pure-host
-# unit testing of scheduler/runner logic. Off in production builds —
-# real VMs come from `vmm::qemu::QemuVmm` once slice 3 lands.
+# Both on by default: the `provium` binary needs them, and so does every
+# published build (see ../pekit.toml), so a plain `cargo build --bin
+# provium` must work. A consumer that wants only the agent client and
+# event types as a library builds with `--no-default-features`.
+default = ["lua", "local-agent"]
+# Enable [`vmm::local_agent::LocalAgentVmm`] — a reference VMM that
+# "boots" by spawning a `provium-agent` connection handler on a
+# `UnixStream::pair()` instead of a real QEMU process. The Lua test
+# driver and the pure-host scheduler/runner tests run on it (no KVM
+# required); real VMs come from `vmm::qemu::QemuVmm`.
 local-agent = ["dep:provium-agent"]
 
-# `lua` enables the mlua bindings + test framework. Behind a feature
-# so consumers that just want the agent client / event types can avoid
+# `lua` enables the mlua bindings + test framework. A feature so
+# consumers that just want the agent client / event types can avoid
 # pulling in mlua's Lua runtime.
 lua = ["dep:mlua"]
 

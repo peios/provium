@@ -325,16 +325,17 @@ impl UserData for VmUd {
             // future-work limitation rather than silently being
             // treated as a process worker.
             //
-            // **v1 isolation note:** worker:open_file allocates the
-            // file handle in the parent agent's table (so subsequent
-            // file:read/write/close ops work), and worker:run_async
-            // does the same for processes (with a per-worker
-            // membership map for kill/join). The "same VM API"
-            // promise holds, but the worker is NOT a hard isolation
-            // boundary — handles are routable from outside the
-            // worker. Per-worker dispatch wire ops are deferred to
-            // the 10.6 slice; until then, treat workers as
-            // bookkeeping namespaces, not security boundaries.
+            // **v1 isolation note:** a worker is a separate sub-agent
+            // process. worker:run_async spawns in that process, so the
+            // child inherits the worker's credentials, and every later
+            // process op is relayed to it. worker:open_file is rejected
+            // by the agent: a handle opened in the worker's file table
+            // would be out of reach of the parent-scoped file ops, so
+            // files are opened from inside the worker with
+            // worker:syscall(openat, …). Process handles the parent
+            // hands back are still routable from outside the worker;
+            // treat workers as credential and process namespaces, not
+            // security boundaries.
             if let Some(t) = opts.as_ref() {
                 if t.get::<Option<bool>>("thread")?.unwrap_or(false) {
                     return Err(mlua::Error::external(
@@ -1214,12 +1215,6 @@ fn parse_boot_overrides(t: &mlua::Table) -> mlua::Result<crate::vmm::BootOpts> {
 /// worker bindings can re-use the same shell-vs-table form.
 pub(crate) fn build_exec_args_public(args: &mlua::Variadic<Value>) -> Result<ExecArgs, String> {
     build_exec_args(args)
-}
-
-/// Public re-export of [`open_mode_from_table`] for the worker
-/// bindings.
-pub(crate) fn open_mode_from_table_public(t: &mlua::Table) -> mlua::Result<OpenMode> {
-    open_mode_from_table(t)
 }
 
 /// Translate a Lua-side `vm:run(...)` argument list into [`ExecArgs`].

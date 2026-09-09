@@ -471,7 +471,7 @@ impl ReplHelper {
         );
         raw.insert("nic", vec!["counters", "capture", "disconnect", "reconnect"]);
         raw.insert("console", vec!["read", "write", "expect", "close"]);
-        raw.insert("worker", vec!["run", "run_async", "open_file", "syscall", "kill", "join"]);
+        raw.insert("worker", vec!["run", "run_async", "syscall", "kill", "join"]);
         raw.insert("snap", vec!["delete", "size", "path"]);
         let methods = raw
             .into_iter()
