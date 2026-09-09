@@ -4,13 +4,26 @@ PATH = "$TC:$PATH"
 CARGO = "$TC/cargo"
 RUSTC = "$TC/rustc"
 
-# The `provium` binary lives in provium-host and is gated behind the
-# `lua` + `local-agent` features (see its `[[bin]]` required-features).
+# The `provium` binary lives in provium-host (its features are on by
+# default). It is not usable alone: every VM boot needs the agent
+# overlay, a cpio carrying a static provium-agent that the host
+# concatenates onto the guest's initrd. `scripts/build-overlay.sh`
+# produces it (needs the x86_64-unknown-linux-musl target, cpio and
+# gzip). A binary run from target/ finds it at dist/; an installed one
+# looks in <bindir>/../share/provium/, so install puts it there.
 [build]
-command = "cargo build --release --bin provium --features lua,local-agent"
+command = '''
+set -eu
+cargo build --release --bin provium
+scripts/build-overlay.sh
+'''
 
 [install.main]
-command = "cargo install --path provium-host --bin provium --features lua,local-agent"
+command = '''
+set -eu
+cargo install --path provium-host --bin provium
+scripts/build-overlay.sh -o "${CARGO_HOME:-$HOME/.cargo}/share/provium/agent-overlay.cpio.gz"
+'''
 
 [install.coverage]
 command = "cargo install --path provium-coverage --bin provium-coverage"
