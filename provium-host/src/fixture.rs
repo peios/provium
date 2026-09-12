@@ -98,23 +98,29 @@ impl CacheKey {
     }
 }
 
-/// Pick the first profile (by sorted name) and return its kernel +
-/// initrd paths for cache-key folding. Mirrors the
-/// per-binary helper used by `provium fixture build`. Used by the
-/// REPL `--fixture` resume path so its key matches the runner's
-/// (otherwise builds would always look stale to `--fixture`).
-pub fn canonical_profile_paths(
+/// Every profile's kernel and initrd path, for cache-key folding.
+///
+/// This is the one canonical answer to "which images does this
+/// config's fixture key fold in?". Every path that computes a key —
+/// the test runner, `provium fixture build` / `rebuild` / `stale`,
+/// and `provium repl --fixture` — calls it, so they all address the
+/// same cache entry. An earlier single-profile variant took the
+/// lex-first profile only; on a config with two or more profiles the
+/// CLI then pre-warmed a key the runner never read, and a kernel swap
+/// on a later profile did not invalidate anything.
+pub fn canonical_profile_paths_all(
     config: &crate::profile::Config,
-) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
-    let mut names: Vec<&String> = config.profiles.keys().collect();
-    names.sort();
-    let Some(first) = names.first() else {
-        return (None, None);
-    };
-    let Some(p) = config.profiles.get(*first) else {
-        return (None, None);
-    };
-    (Some(p.kernel.clone()), Some(p.initrd.clone()))
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    // `profiles` is a `BTreeMap`, so this iterates in profile-name
+    // order: the same config yields the same digest on every run and
+    // on every host.
+    let mut kernels = Vec::with_capacity(config.profiles.len());
+    let mut initrds = Vec::with_capacity(config.profiles.len());
+    for profile in config.profiles.values() {
+        kernels.push(profile.kernel.clone());
+        initrds.push(profile.initrd.clone());
+    }
+    (kernels, initrds)
 }
 
 /// Compute the cache key for a fixture file.

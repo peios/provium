@@ -1548,15 +1548,6 @@ fn render_json(r: &provium_host::scheduler::dispatch::DispatchedFile) -> String 
 // Misc helpers
 // ---------------------------------------------------------------------------
 
-/// Pick the first profile (by sorted name) and return its kernel +
-/// initrd paths for cache-key folding. Re-export of the library
-/// helper so the CLI doesn't reach into `provium_host::config`.
-fn canonical_profile_paths(
-    config: &Config,
-) -> (Option<PathBuf>, Option<PathBuf>) {
-    provium_host::fixture::canonical_profile_paths(config)
-}
-
 fn run_fixture_cmd(
     op: &FixtureCmd,
     config: &Config,
@@ -1624,16 +1615,17 @@ fn run_fixture_cmd(
                 &config.provium.roots,
                 &source,
             );
-            let (kernel, initrd) = canonical_profile_paths(config);
+            let (kernels, initrds) =
+                provium_host::fixture::canonical_profile_paths_all(config);
             let externals = provium_host::lua::lab_ud_resolve_external_deps_pub(
                 &config.provium.roots,
                 &fixture_path,
                 &source,
             );
             let kernels_v: Vec<&std::path::Path> =
-                kernel.as_deref().into_iter().collect();
+                kernels.iter().map(|p| p.as_path()).collect();
             let initrds_v: Vec<&std::path::Path> =
-                initrd.as_deref().into_iter().collect();
+                initrds.iter().map(|p| p.as_path()).collect();
             let external_refs: Vec<&std::path::Path> =
                 externals.iter().map(|p| p.as_path()).collect();
             let key = provium_host::fixture::compute_key_with_deps_kernels_and_externals(
@@ -1706,16 +1698,17 @@ fn run_fixture_cmd(
                 &config.provium.roots,
                 &source,
             );
-            let (kernel, initrd) = canonical_profile_paths(config);
+            let (kernels, initrds) =
+                provium_host::fixture::canonical_profile_paths_all(config);
             let externals = provium_host::lua::lab_ud_resolve_external_deps_pub(
                 &config.provium.roots,
                 &fixture_path,
                 &source,
             );
             let kernels_v: Vec<&std::path::Path> =
-                kernel.as_deref().into_iter().collect();
+                kernels.iter().map(|p| p.as_path()).collect();
             let initrds_v: Vec<&std::path::Path> =
-                initrd.as_deref().into_iter().collect();
+                initrds.iter().map(|p| p.as_path()).collect();
             let external_refs: Vec<&std::path::Path> =
                 externals.iter().map(|p| p.as_path()).collect();
             let key = provium_host::fixture::compute_key_with_deps_kernels_and_externals(
@@ -1794,7 +1787,8 @@ fn run_fixture_cmd(
             // hashes to a key not present in the cache. Both single-VM
             // (.snap) and lab (.lab/) cache layouts are checked.
             let mut found = 0u64;
-            let (kernel, initrd) = canonical_profile_paths(config);
+            let (kernels, initrds) =
+                provium_host::fixture::canonical_profile_paths_all(config);
             for root in &config.provium.roots {
                 let root_path = std::path::Path::new(root);
                 if !root_path.exists() {
@@ -1825,9 +1819,9 @@ fn run_fixture_cmd(
                                 &source,
                             );
                         let kernels_v: Vec<&std::path::Path> =
-                            kernel.as_deref().into_iter().collect();
+                            kernels.iter().map(|p| p.as_path()).collect();
                         let initrds_v: Vec<&std::path::Path> =
-                            initrd.as_deref().into_iter().collect();
+                            initrds.iter().map(|p| p.as_path()).collect();
                         let external_refs: Vec<&std::path::Path> =
                             externals.iter().map(|p| p.as_path()).collect();
                         let key =
