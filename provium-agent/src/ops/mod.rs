@@ -14,4 +14,4 @@ pub mod worker;
 
 mod util;
 
-pub(crate) use util::os_error_from_io;
+pub(crate) use util::{kill_process_group, os_error_from_io};

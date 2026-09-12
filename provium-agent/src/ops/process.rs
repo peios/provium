@@ -1,7 +1,7 @@
 //! Process-family op handlers: `RunAsync` / `Wait` / `Kill`.
 
 use std::io::Read;
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -18,7 +18,7 @@ use crate::state::{AgentState, ProcessSlot};
 
 use super::worker;
 
-use super::os_error_from_io;
+use super::{kill_process_group, os_error_from_io};
 
 /// `RunAsync` — spawn a child + start drain threads.
 pub fn run_async(args: RunAsyncArgs, state: &Arc<AgentState>) -> AgentMessage {
@@ -36,6 +36,10 @@ pub fn run_async(args: RunAsyncArgs, state: &Arc<AgentState>) -> AgentMessage {
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Own process group, so a `Wait` timeout can kill the whole tree
+    // rather than just the process we spawned. `proc:kill` still
+    // signals that one process — see `kill` below.
+    cmd.process_group(0);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -145,6 +149,11 @@ pub fn wait(args: WaitArgs, state: &Arc<AgentState>) -> AgentMessage {
 
 /// `Kill` — send `signal` to the tracked child. Caller still has
 /// to call `Wait` to reap the process.
+///
+/// The signal goes to that one process, not to the process group it
+/// leads: a test asking for `SIGUSR1` means the process it named. A
+/// `Wait` timeout is the path that kills the whole group, because
+/// there the agent has to guarantee the op returns.
 pub fn kill(args: KillArgs, state: &Arc<AgentState>) -> AgentMessage {
     if let Some((w, inner)) = state.worker_process(args.handle) {
         let op = HostMessage::Kill(KillArgs { handle: inner, ..args });
@@ -236,10 +245,10 @@ fn wait_with_timeout(
             Ok(Some(s)) => return WaitOutcome::Exited(s),
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
-                    let pid = child.id();
-                    unsafe {
-                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
-                    }
+                    // The whole group, not just the child: anything it
+                    // forked still holds the capture pipes, and the
+                    // caller joins the drain threads once we return.
+                    kill_process_group(child.id(), libc::SIGKILL);
                     return match child.wait() {
                         Ok(s) => WaitOutcome::TimedOutKilled(s),
                         Err(e) => WaitOutcome::Err(e),

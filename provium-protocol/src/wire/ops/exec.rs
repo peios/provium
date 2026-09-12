@@ -40,10 +40,10 @@ pub struct ExecArgs {
     #[serde(default)]
     pub cwd: Option<String>,
 
-    /// Wall-clock timeout in milliseconds. The agent kills the process
-    /// (SIGKILL after a short SIGTERM grace) if it has not exited in
-    /// this time and surfaces [`ExitStatus::TimedOut`]. `None` waits
-    /// indefinitely.
+    /// Wall-clock timeout in milliseconds. If the command has not
+    /// exited in this time the agent SIGKILLs the process group it
+    /// leads — so a shell that forked its work dies with it — and
+    /// surfaces [`ExitStatus::TimedOut`]. `None` waits indefinitely.
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }

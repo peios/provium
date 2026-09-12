@@ -47,8 +47,9 @@ pub type RunAsyncResult = OpResult<ProcessHandle>;
 pub struct WaitArgs {
     /// Handle returned by an earlier `RunAsync`.
     pub handle: ProcessHandle,
-    /// Wall-clock wait cap. The agent kills with SIGKILL on
-    /// timeout, captures whatever stdout/stderr accumulated, and
+    /// Wall-clock wait cap. On timeout the agent SIGKILLs the
+    /// process group the child leads — so anything it forked goes
+    /// too — captures whatever stdout/stderr accumulated, and
     /// returns [`super::exec::ExitStatus::TimedOut`]. `None` waits
     /// forever.
     #[serde(default)]

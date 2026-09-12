@@ -2,7 +2,7 @@
 //! stdout/stderr, applying an optional timeout.
 
 use std::io::{Read, Write};
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use provium_protocol::wire::{ExecArgs, ExecOk, ExecResult, ExitStatus};
 
-use super::os_error_from_io;
+use super::{kill_process_group, os_error_from_io};
 
 /// Run `args.cmd` and collect its full output. Always returns an
 /// [`AgentMessage`]-shaped result; never panics on guest-OS failures
@@ -43,6 +43,12 @@ fn spawn_child(args: &ExecArgs) -> std::io::Result<Child> {
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Give the child its own process group so a timeout can kill
+    // everything it spawned. Without this, a shell that forks rather
+    // than execs its command leaves the real worker running as our
+    // grandchild, holding the stdout/stderr pipes open, and the drain
+    // threads below never see EOF.
+    cmd.process_group(0);
     cmd.spawn()
 }
 
@@ -85,7 +91,7 @@ fn wait_with_capture(mut child: Child, args: &ExecArgs) -> std::io::Result<ExecO
         Some(ms) => match wait_rx.recv_timeout(Duration::from_millis(ms)) {
             Ok(r) => r,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                kill(pid);
+                kill_process_group(pid, libc::SIGKILL);
                 timed_out = true;
                 // The kill above guarantees waiter will produce
                 // a status shortly; recv() must complete without
@@ -140,13 +146,4 @@ fn drain<R: Read>(mut r: R) -> Vec<u8> {
     let mut buf = Vec::new();
     let _ = r.read_to_end(&mut buf);
     buf
-}
-
-fn kill(pid: u32) {
-    // SAFETY: passing a valid pid value to libc::kill is documented
-    // behaviour; SIGKILL (9) is always defined. ESRCH from a
-    // never-spawned-or-already-reaped pid is fine to ignore.
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGKILL);
-    }
 }
