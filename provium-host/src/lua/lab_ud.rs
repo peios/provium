@@ -13,7 +13,7 @@ use provium_protocol::events::{
 };
 
 use crate::fixture::{
-    self, default_cache_dir, CacheEntryPaths,
+    self, canonical_profile_paths_all, default_cache_dir, CacheEntryPaths,
 };
 use crate::lab::Lab;
 use crate::profile::Config;
@@ -1070,49 +1070,6 @@ fn collect_external_deps(
     }
 }
 
-/// Canonical kernel/initrd paths for cache-key folding. Picks the
-/// first profile by sorted name (deterministic across runs).
-///
-/// R9 sched-m4: this is the LEGACY single-profile helper. Use
-/// [`canonical_profile_paths_all`] in new call sites — folding
-/// only the first profile's paths silently misses kernel
-/// invalidation on profiles that sort later. Kept temporarily
-/// for callers we haven't migrated yet.
-#[allow(dead_code)]
-fn canonical_profile_paths(
-    config: &Arc<Config>,
-) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
-    let mut names: Vec<&String> = config.profiles.keys().collect();
-    names.sort();
-    let Some(first) = names.first() else {
-        return (None, None);
-    };
-    let p = match config.profiles.get(*first) {
-        Some(p) => p,
-        None => return (None, None),
-    };
-    (Some(p.kernel.clone()), Some(p.initrd.clone()))
-}
-
-/// All profiles' kernel/initrd paths, sorted by profile name for
-/// determinism. Multi-profile cache-key folding so a kernel
-/// swap on any profile invalidates every fixture.
-fn canonical_profile_paths_all(
-    config: &Arc<Config>,
-) -> (Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
-    let mut names: Vec<&String> = config.profiles.keys().collect();
-    names.sort();
-    let mut kernels = Vec::with_capacity(names.len());
-    let mut initrds = Vec::with_capacity(names.len());
-    for n in names {
-        if let Some(p) = config.profiles.get(n) {
-            kernels.push(p.kernel.clone());
-            initrds.push(p.initrd.clone());
-        }
-    }
-    (kernels, initrds)
-}
-
 #[cfg(test)]
 mod external_dep_tests {
     use super::*;
@@ -1444,9 +1401,7 @@ fn build_or_resume_fixture(this: &LabUd, fixture_name: &str) -> Result<crate::vm
         resolve_dep_keys(&this.config.provium.roots, &source, &mut Vec::new())?;
     // Fold in kernel/initrd identifiers for ALL profiles so a
     // kernel-image swap on any profile invalidates the cache, per
-    // `DESIGN.md` § Fixtures. R9 sched-m4: previously folded only
-    // the first profile by sorted name, which silently missed
-    // kernel changes on later profiles.
+    // `DESIGN.md` § Fixtures.
     let (kernels, initrds) = canonical_profile_paths_all(&this.config);
     let kernel_refs: Vec<&std::path::Path> = kernels.iter().map(|p| p.as_path()).collect();
     let initrd_refs: Vec<&std::path::Path> = initrds.iter().map(|p| p.as_path()).collect();
@@ -1682,12 +1637,12 @@ fn unique_fixture_vm_name(lab: &Lab, fixture_name: &str) -> String {
 }
 
 fn first_profile_name(config: &Config) -> String {
-    // Mirror `canonical_profile_paths` exactly — sort by name and
-    // take the lex-first. Without sorting, multi-profile configs
-    // would resolve the cache key against profile A and the
-    // restore against profile B (different kernel/initrd) on
-    // different runs of the same fixture, producing kernel
-    // mismatches that QEMU rejects at restore time.
+    // The profile a fixture VM restores into when the fixture does
+    // not name one: the lex-first, which is stable across runs.
+    // Without a deterministic choice the same fixture would restore
+    // against profile A on one run and profile B on the next — a
+    // different kernel and initrd, which QEMU rejects at restore
+    // time. The cache key is unaffected: it folds every profile.
     let mut names: Vec<&String> = config.profiles.keys().collect();
     names.sort();
     names

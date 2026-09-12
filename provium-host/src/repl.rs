@@ -257,8 +257,8 @@ fn resume_fixture_into(
     fixture_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::fixture::{
-        canonical_profile_paths, compute_key_with_deps_and_kernel, default_cache_dir,
-        read_fixture_source, CacheEntryPaths,
+        canonical_profile_paths_all, compute_key_with_deps_kernels_and_externals,
+        default_cache_dir, read_fixture_source, CacheEntryPaths,
     };
     let cache_dir = config
         .provium
@@ -280,20 +280,33 @@ fn resume_fixture_into(
     })?;
     let source = read_fixture_source(&path)?;
     // Match the runner / `provium fixture build` exactly: fold in
-    // transitively-referenced fixture deps + the canonical
-    // kernel/initrd identifier. Without this, a fixture rebuilt
-    // by the runner with a kernel-bumped key looks stale to the
-    // REPL even though it just got fresh data.
+    // transitively-referenced fixture deps, every profile's
+    // kernel/initrd identifier, and the declared external host
+    // files. Anything this leaves out addresses a different cache
+    // entry, so a fixture the runner has just rebuilt looks unbuilt
+    // to `--fixture`.
     let dep_keys = crate::lua::lab_ud_resolve_dep_keys_pub(
         &config.provium.roots,
         &source,
     );
-    let (kernel, initrd) = canonical_profile_paths(config);
-    let key = compute_key_with_deps_and_kernel(
+    let (kernels, initrds) = canonical_profile_paths_all(config);
+    let kernel_refs: Vec<&std::path::Path> =
+        kernels.iter().map(|p| p.as_path()).collect();
+    let initrd_refs: Vec<&std::path::Path> =
+        initrds.iter().map(|p| p.as_path()).collect();
+    let externals = crate::lua::lab_ud_resolve_external_deps_pub(
+        &config.provium.roots,
+        &path,
+        &source,
+    );
+    let external_refs: Vec<&std::path::Path> =
+        externals.iter().map(|p| p.as_path()).collect();
+    let key = compute_key_with_deps_kernels_and_externals(
         &source,
         &dep_keys,
-        kernel.as_deref(),
-        initrd.as_deref(),
+        &kernel_refs,
+        &initrd_refs,
+        &external_refs,
     );
     let entry = CacheEntryPaths::for_key(&cache_dir, &key);
     if !entry.snapshot.is_file() {
