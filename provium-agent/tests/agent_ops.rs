@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 use provium_protocol::frame::{read_frame, write_frame, DEFAULT_MAX_FRAME_BYTES};
 use provium_protocol::wire::{
     AgentMessage, CloseArgs, ExecArgs, ExitStatus, Hello, HostMessage, OpResult, OpenFileArgs,
-    OpenMode, ReadArgs, ReadFileArgs, StatArgs, StreamEnd, TailFileArgs, TailStart, WriteArgs,
-    WriteFileArgs, WriteFileMode,
+    OpenMode, ReadArgs, ReadFileArgs, RunAsyncArgs, StatArgs, StreamEnd, TailFileArgs, TailStart,
+    WaitArgs, WriteArgs, WriteFileArgs, WriteFileMode,
 };
 use provium_protocol::PROTOCOL_VERSION;
 
@@ -256,6 +256,12 @@ fn exec_returns_oserror_when_binary_does_not_exist() {
     }
 }
 
+/// The elapsed-time assertion is the real subject here. `sh` on most
+/// hosts forks `sleep` rather than exec'ing it, so the grandchild holds
+/// the captured stdout/stderr pipes; the op only returns once they hit
+/// EOF. Killing the timed-out child alone leaves the grandchild
+/// running and the op blocks for the full 30 s, so returning promptly
+/// is proof that the whole process group went down.
 #[test]
 fn exec_kills_runaway_child_at_timeout() {
     let agent = TestAgent::new();
@@ -276,6 +282,43 @@ fn exec_kills_runaway_child_at_timeout() {
     );
     match resp {
         AgentMessage::ExecResult(provium_protocol::wire::ExecResult::Ok(ok)) => {
+            assert_eq!(ok.status, ExitStatus::TimedOut);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+/// `Wait`'s timeout has the same shape as `Exec`'s and the same
+/// failure mode: `wait` joins the drain threads once the child is
+/// reaped, so a surviving grandchild pins the op open. Here the
+/// runaway is explicitly backgrounded, so it outlives `sh` on every
+/// shell rather than only the ones that fork.
+#[test]
+fn wait_timeout_kills_the_whole_process_group() {
+    let agent = TestAgent::new();
+    let handle = match agent.run_op(HostMessage::RunAsync(RunAsyncArgs {
+        cmd: "sh".into(),
+        args: vec!["-c".into(), "sleep 30 & wait".into()],
+        env: Default::default(),
+        env_clear: false,
+        cwd: None,
+    })) {
+        AgentMessage::RunAsyncResult(OpResult::Ok(h)) => h,
+        other => panic!("expected RunAsyncResult::Ok, got: {other:?}"),
+    };
+
+    let started = Instant::now();
+    let resp = agent.run_op(HostMessage::Wait(WaitArgs {
+        handle,
+        timeout_ms: Some(150),
+    }));
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "wait should have killed the group quickly, took {elapsed:?}"
+    );
+    match resp {
+        AgentMessage::WaitResult(OpResult::Ok(ok)) => {
             assert_eq!(ok.status, ExitStatus::TimedOut);
         }
         other => panic!("unexpected: {other:?}"),
