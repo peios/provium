@@ -289,6 +289,13 @@ impl VmInstance {
         self.backend.reset()
     }
 
+    /// Close the reset window opened by [`Self::reset`], once the guest
+    /// is back. Must be called on every path out of a reset, including
+    /// failure.
+    pub fn end_reset_window(&self) -> Result<(), VmmError> {
+        self.backend.end_reset_window()
+    }
+
     /// Press the power button (`system_powerdown`).
     pub fn power_button(&self) -> Result<(), VmmError> {
         self.backend.power_button()
@@ -376,6 +383,19 @@ pub(crate) trait Backend: Send + Sync {
     /// `system_reset`; LocalAgentBackend leaves the default.
     fn reset(&self) -> Result<(), VmmError> {
         Err(VmmError::Unimplemented("backend reset"))
+    }
+    /// Close the window opened by [`Self::reset`], restoring whatever
+    /// reboot policy the backend launched with.
+    ///
+    /// Split from `reset` because the window has to stay open for the
+    /// whole reboot, not just until the machine acknowledges the reset:
+    /// the guest coming back up issues further resets of its own, and a
+    /// backend that has already restored "exit on reboot" dies partway
+    /// through the boot it was asked to perform.
+    ///
+    /// Default-impl: nothing to restore.
+    fn end_reset_window(&self) -> Result<(), VmmError> {
+        Ok(())
     }
     /// Default-impl: unsupported. QemuBackend overrides via QMP
     /// `system_powerdown`.

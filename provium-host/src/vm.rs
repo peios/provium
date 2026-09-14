@@ -24,6 +24,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
@@ -40,6 +41,23 @@ use crate::agent_client::{AgentClient, PendingSyscall, TailFileOutcome, TailFile
 use crate::profile::Profile;
 use crate::vmm::{BootOpts, VmInstance, Vmm, VmmError};
 use crate::ClientError;
+
+/// How long [`Vm::reset`] waits for the guest to serve its agent again.
+///
+/// Matches the `peinit` profile's own `agent_boot_timeout = 120.0`,
+/// which is the established answer to "how long may a guest take to
+/// bring its agent up", rather than a number invented here.
+///
+/// A backstop rather than a working budget. Measured, a reset has the
+/// agent answering again in about 1.5 seconds on an idle host, and
+/// within single-digit seconds on a loaded one. The margin is for a
+/// guest that genuinely boots slowly, not for any known slowness in the
+/// reset path — there is none.
+const RESET_AGENT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Gap between agent probes while waiting out a reset. Short, because a
+/// dial to a guest that is not listening yet fails immediately.
+const RESET_AGENT_RETRY: Duration = Duration::from_millis(250);
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -1252,6 +1270,11 @@ impl Vm {
     }
 
     /// Reset the VM (warm reboot via QMP `system_reset`).
+    ///
+    /// Returns once the guest is serving its agent again, so a caller
+    /// can use the VM immediately. Waiting is not a convenience: see
+    /// the note on the retry loop below for why returning early made
+    /// the VM permanently unusable.
     pub fn reset(&self) -> Result<(), VmError> {
         let inner = self.inner.lock().unwrap();
         // DESIGN.md § VM state machine: reset() / power_button()
@@ -1271,7 +1294,71 @@ impl Vm {
         if let Err(e) = &r {
             self.maybe_mark_dead_on_vmm_err(e);
         }
-        r.map_err(VmError::Vmm)
+        r.map_err(VmError::Vmm)?;
+
+        // A reset severs the agent connection by design — the guest it
+        // was talking to no longer exists. Absorb that here rather than
+        // letting a caller meet it.
+        //
+        // Without this the VM was left permanently unusable (PEI-1112).
+        // `with_client` marks the VM Dead on any connect-class failure,
+        // and then refuses every later call on state alone, before it
+        // ever dials. So the first `vm:run` after a reset would fail
+        // while the guest was still booting, latch Dead, and every
+        // retry after that short-circuited — the agent would start
+        // listening seconds later and nothing could ever observe it.
+        // No caller-side timeout could recover from that, which is why
+        // waits of 30s, 180s and 480s all failed identically.
+        //
+        // The client redials on every call, so polling `ping` is all
+        // that is needed. Each attempt takes the lock only for its own
+        // dial: a dial to a guest that is not listening yet fails at
+        // once (ECONNRESET, or ENODEV before the device is back), so
+        // this does not hold the lock against `console()` and friends.
+        let deadline = Instant::now() + RESET_AGENT_TIMEOUT;
+        let outcome = loop {
+            let (state, answered) = {
+                let inner = self.inner.lock().unwrap();
+                // Deliberately not requiring Booted: the whole point is
+                // that the VM must not be treated as dead while its
+                // guest is coming back.
+                let probe = inner.running.as_ref().map(|res| res.client.ping().is_ok());
+                (inner.state, probe)
+            };
+            match answered {
+                None => break Err(self.wrong_state(state, "reset")),
+                Some(true) => break Ok(()),
+                Some(false) => {}
+            }
+            if Instant::now() >= deadline {
+                break Err(VmError::Client(ClientError::Connect(
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "guest did not serve its agent again after a reset",
+                    ),
+                )));
+            }
+            std::thread::sleep(RESET_AGENT_RETRY);
+        };
+
+        // Close the window on every path, including failure. The VMM
+        // spent the reset configured to reboot rather than exit; leaving
+        // it that way would silently discard the guest-panic behaviour
+        // the VM was launched with.
+        self.end_reset_window();
+        outcome
+    }
+
+    /// Restore the VMM's launch-time reboot policy after a reset.
+    ///
+    /// Best-effort and infallible by design: it runs on the failure path
+    /// too, where the VM may already be gone, and a failure to restore
+    /// must not mask the reset error that brought us here.
+    fn end_reset_window(&self) {
+        let inner = self.inner.lock().unwrap();
+        if let Some(inst) = inner.running.as_ref().and_then(|r| r.instance.as_ref()) {
+            let _ = inst.end_reset_window();
+        }
     }
 
     /// Wake a guest that suspended itself (ACPI S3) via QMP
