@@ -32,6 +32,33 @@ pub mod agent_overlay;
 pub mod files_cpio;
 pub mod qemu;
 
+/// Per-VM memory cap applied when neither the boot opts nor (for the
+/// interactive console) the CLI override one. One value for every
+/// backend, because the scheduler charges it before it knows which
+/// backend will launch: see [`BootOpts::sizing`].
+pub const DEFAULT_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
+/// Per-VM vCPU count applied when nothing overrides it.
+pub const DEFAULT_CPUS: u32 = 1;
+
+impl BootOpts {
+    /// The memory and vCPUs this boot will actually run with: the
+    /// declared values, or the launch defaults where nothing was
+    /// declared.
+    ///
+    /// Every backend's `launch` sizes the VM through this, and so
+    /// does every pool reservation (`Vm::boot`, `Lab::boot`). That is
+    /// the point of having one resolution: a boot that declares
+    /// nothing used to be charged nothing while still launching with
+    /// a vCPU and 512 MiB, so an unclaimed testset ran past the CPU
+    /// budget by as many VMs as it had files (PEI-1111).
+    pub fn sizing(&self) -> (u64, u32) {
+        (
+            self.memory_bytes.unwrap_or(DEFAULT_MEMORY_BYTES),
+            self.cpus.unwrap_or(DEFAULT_CPUS),
+        )
+    }
+}
+
 /// Boot-time runtime configuration for a VM. Mirrors the Lua API's
 /// `vm:boot(boot_opts?)` second argument.
 #[derive(Clone, Debug, Default)]

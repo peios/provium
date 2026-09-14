@@ -42,12 +42,10 @@ use crate::ClientError;
 
 const DEFAULT_QEMU_BINARY: &str = "qemu-system-x86_64";
 const DEFAULT_AGENT_PORT: u32 = 1234;
-/// Per-VM memory cap applied when neither the boot opts nor (for the
-/// interactive console) the CLI override one. Public so the
-/// `provium console` path defaults consistently with launch.
-pub const DEFAULT_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
-/// Per-VM vCPU count applied when nothing overrides it.
-pub const DEFAULT_CPUS: u32 = 1;
+// The per-VM defaults live with `BootOpts` so the scheduler and every
+// backend size a boot the same way; re-exported here because the
+// `provium console` path has always taken them from this module.
+pub use super::{DEFAULT_CPUS, DEFAULT_MEMORY_BYTES};
 /// How long [`QemuVmm::boot`] waits for the QMP socket file to appear
 /// after the QEMU child has been spawned. Generous — typical times
 /// are <100ms.
@@ -276,8 +274,7 @@ impl QemuVmm {
         let console_log = scratch.join("console.log");
         let console_socket = scratch.join("console.sock");
 
-        let memory_bytes = opts.memory_bytes.unwrap_or(DEFAULT_MEMORY_BYTES);
-        let cpus = opts.cpus.unwrap_or(DEFAULT_CPUS);
+        let (memory_bytes, cpus) = opts.sizing();
         let mut raw_cmdline = opts
             .cmdline_override
             .clone()

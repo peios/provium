@@ -856,45 +856,45 @@ impl Vm {
             });
         }
 
-        // Per `DESIGN.md` § Scheduler / Per-VM overhead: solo boot
-        // reserves declared memory + ~100 MiB VMM overhead + cpus.
+        // A solo boot reserves what the VM will run with — the
+        // declared memory and vCPUs, or the launch defaults where
+        // nothing was declared (`BootOpts::sizing`, the same
+        // resolution the backend launches with) — plus ~100 MiB of
+        // VMM overhead. Charging the declared values alone let an
+        // undeclared boot cost the budget nothing while running with
+        // a vCPU and 512 MiB (PEI-1111).
+        //
         // The reservation is a slice of the file's claim when the
         // file has one, and otherwise a pool reservation in the
         // file's name — see [`crate::scheduler::reserve`]. `lab:boot()`
         // clears `self.pool` on each member before launch so the
         // lab's joint reservation isn't double-counted here.
         let reservation = if let Some(pool) = &self.pool {
+            let (memory_bytes, cpus) = opts.sizing();
             let amount = crate::scheduler::ResourceAmount {
-                memory_bytes: opts
-                    .memory_bytes
-                    .unwrap_or(0)
-                    .saturating_add(VMM_OVERHEAD_BYTES),
-                cpus: opts.cpus.unwrap_or(0),
+                memory_bytes: memory_bytes.saturating_add(VMM_OVERHEAD_BYTES),
+                cpus,
             };
-            if amount.is_zero() {
-                None
-            } else {
-                use crate::scheduler::{AcquireError, ReserveError};
-                match crate::scheduler::reserve(pool, self.account.as_ref(), amount) {
-                    Ok(hold) => Some(hold),
-                    // Per `DESIGN.md` § Failure mode catalogue: boot >
-                    // host budget → fail test (impossible to satisfy).
-                    Err(ReserveError::Pool(AcquireError::ExceedsTotal { requested, total })) => {
-                        return Err(VmError::PoolExceeded {
-                            vm: self.name.clone(),
-                            requested,
-                            total,
-                        });
-                    }
-                    // Past the file's claim, or a proven deadlock:
-                    // both are the file's declaration to fix, and
-                    // the message says how.
-                    Err(e) => {
-                        return Err(VmError::BootRefused {
-                            vm: self.name.clone(),
-                            reason: e.to_string(),
-                        });
-                    }
+            use crate::scheduler::{AcquireError, ReserveError};
+            match crate::scheduler::reserve(pool, self.account.as_ref(), amount) {
+                Ok(hold) => Some(hold),
+                // A boot larger than the whole pool can never be
+                // satisfied: fail the test rather than wait.
+                Err(ReserveError::Pool(AcquireError::ExceedsTotal { requested, total })) => {
+                    return Err(VmError::PoolExceeded {
+                        vm: self.name.clone(),
+                        requested,
+                        total,
+                    });
+                }
+                // Past the file's claim, or a proven deadlock:
+                // both are the file's declaration to fix, and
+                // the message says how.
+                Err(e) => {
+                    return Err(VmError::BootRefused {
+                        vm: self.name.clone(),
+                        reason: e.to_string(),
+                    });
                 }
             }
         } else {
