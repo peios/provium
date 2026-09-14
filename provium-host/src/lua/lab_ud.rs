@@ -350,8 +350,8 @@ impl UserData for LabUd {
                 1 => {
                     let name = arg_string(&args[0], "name")?;
                     let bridge = this
-                        .lab
-                        .get_bridge(&name)
+                        .lookup_bridge(&name)
+                        .ok_or_else(|| crate::lab::LabError::UnknownBridge(name.clone()))
                         .map_err(mlua::Error::external)?;
                     Ok(Value::UserData(
                         lua.create_userdata(BridgeUd::wrap(bridge))?,

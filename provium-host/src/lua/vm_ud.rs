@@ -101,6 +101,22 @@ impl VmUd {
     pub(crate) fn add_bridge_attachment(&self, bridge: crate::bridge::Bridge) {
         self.vm.add_bridge_attachment(bridge);
     }
+
+    fn shutdown_with_event(&self) -> mlua::Result<()> {
+        let duration = self
+            .boot_started
+            .lock()
+            .unwrap()
+            .map(|t| u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        self.vm.shutdown().map_err(mlua::Error::external)?;
+        self.events.emit(Event::VmShutdown(VmShutdown {
+            file: self.lab_name.clone(),
+            vm_name: self.vm.name().to_owned(),
+            duration_ns: duration,
+        }));
+        Ok(())
+    }
 }
 
 impl UserData for VmUd {
@@ -138,28 +154,19 @@ impl UserData for VmUd {
             this.vm.resume().map_err(mlua::Error::external)?;
             Ok(())
         });
-        methods.add_method("shutdown", |_, this, ()| {
-            let duration = this
-                .boot_started
-                .lock()
-                .unwrap()
-                .map(|t| u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX))
-                .unwrap_or(0);
-            this.vm.shutdown().map_err(mlua::Error::external)?;
-            this.events.emit(Event::VmShutdown(VmShutdown {
-                file: this.lab_name.clone(),
-                vm_name: this.vm.name().to_owned(),
-                duration_ns: duration,
-            }));
-            Ok(())
-        });
+        methods.add_method("shutdown", |_, this, ()| this.shutdown_with_event());
         // Auto-close hook used by the resource-graph walker. Idempotent.
         methods.add_method("close", |_, this, ()| {
             // Only call shutdown if not already in Shutdown state —
             // shutdown's state guard accepts Booted/Paused/Created/Dead.
             let state = this.vm.state();
-            if !matches!(state, crate::vm::VmState::Shutdown) {
-                let _ = this.vm.shutdown();
+            if matches!(
+                state,
+                crate::vm::VmState::Booted | crate::vm::VmState::Paused
+            ) {
+                this.shutdown_with_event()?;
+            } else if !matches!(state, crate::vm::VmState::Shutdown) {
+                this.vm.shutdown().map_err(mlua::Error::external)?;
             }
             Ok(())
         });

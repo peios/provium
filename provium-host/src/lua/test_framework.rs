@@ -60,10 +60,11 @@ local function _close_scope(list)
     for _, entry in ipairs(sorted) do
         local ud = entry.r.ud
         if ud and type(ud) == "userdata" then
-            local mt = getmetatable(ud)
-            if mt and (mt.close or (ud.close ~= nil)) then
-                pcall(function() ud:close() end)
-            end
+            -- mlua protects userdata metatables: getmetatable(ud)
+            -- can return false even though ud:close() is available.
+            -- Keep lookup and invocation inside pcall so one failed
+            -- cleanup cannot prevent later resources from closing.
+            pcall(function() ud:close() end)
         end
     end
 end
