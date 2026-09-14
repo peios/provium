@@ -16,6 +16,38 @@ mod mock;
 use mock::MockServer;
 
 #[test]
+fn event_wait_evaluates_each_new_event_once() {
+    use std::cell::RefCell;
+
+    let server = MockServer::start();
+    let qmp = Qmp::connect(server.path()).unwrap();
+    let mark = qmp.event_mark();
+    let seen = RefCell::new(Vec::new());
+    server.push_event("PROGRESS", json!({"step": 0}), Duration::ZERO);
+    let result = qmp
+        .wait_event(
+            "PROGRESS",
+            mark,
+            |event| {
+                let step = event.data["step"].as_u64().unwrap();
+                let mut seen = seen.borrow_mut();
+                let first_visit = !seen.contains(&step);
+                seen.push(step);
+                if step < 32 && first_visit {
+                    server.push_event("PROGRESS", json!({"step": step + 1}), Duration::ZERO);
+                }
+                step == 32
+            },
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    assert_eq!(result.data["step"], 32);
+    assert_eq!(*seen.borrow(), (0..=32).collect::<Vec<_>>());
+    drop(qmp);
+    server.shutdown();
+}
+
+#[test]
 fn connect_completes_handshake() {
     let server = MockServer::start();
     let qmp = Qmp::connect(server.path()).expect("connect");
@@ -34,7 +66,10 @@ fn connect_completes_handshake() {
 #[test]
 fn execute_returns_value_on_success() {
     let server = MockServer::start();
-    server.respond_to("query-status", json!({"status": "running", "running": true}));
+    server.respond_to(
+        "query-status",
+        json!({"status": "running", "running": true}),
+    );
     let qmp = Qmp::connect(server.path()).unwrap();
 
     let result = qmp.execute("query-status", Value::Null).unwrap();
