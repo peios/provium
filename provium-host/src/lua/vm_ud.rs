@@ -1292,10 +1292,21 @@ fn parse_boot_overrides(
                     )));
                 }
             };
+            let mediated = match entry.get::<Value>("mediated")? {
+                Value::Nil => false,
+                Value::Boolean(b) => b,
+                other => {
+                    return Err(mlua::Error::external(format!(
+                        "boot_opts.disks: `mediated` for `{id}` must be a boolean, got {}",
+                        other.type_name(),
+                    )));
+                }
+            };
             opts.disks.push(crate::vmm::AttachedDisk {
                 id,
                 path: std::path::PathBuf::from(path),
                 readonly,
+                mediated,
             });
         }
     }

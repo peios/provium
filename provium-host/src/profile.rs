@@ -239,6 +239,17 @@ pub struct DiskSpec {
     /// every later boot in the run then reads.
     #[serde(default)]
     pub readonly: bool,
+    /// Route this disk's I/O through provium rather than handing QEMU
+    /// the file.
+    ///
+    /// The guest sees an ordinary `virtio-blk` device; underneath, the
+    /// bytes travel over an NBD server provium runs, which holds writes
+    /// until the guest flushes them. That is what makes
+    /// `disk:power_cut()` exact — it drops precisely what was never made
+    /// durable. Opt-in per disk, so a disk that is not mediated says so
+    /// by refusing the call rather than doing something weaker.
+    #[serde(default)]
+    pub mediated: bool,
 }
 
 impl DiskSpec {

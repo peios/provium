@@ -235,6 +235,29 @@ impl UserData for DiskUd {
             }
             Ok(Value::Table(table))
         });
+        methods.add_method("power_cut", |_, this, ()| {
+            // The fault modes above are the *test's* view of the image.
+            // This one is the guest's: it throws away whatever the
+            // guest wrote but never flushed, so what is left is exactly
+            // what it made durable.
+            //
+            // Only a disk booted with `mediated = true` has a server to
+            // ask, and a disk without one says so rather than quietly
+            // succeeding — a power cut that silently did nothing would
+            // let a test conclude data survived a crash that never
+            // happened.
+            let (id, vm) = {
+                let g = this.inner.lock().unwrap();
+                (g.id.clone(), g.vm.clone())
+            };
+            let Some(vm) = vm else {
+                return Err(mlua::Error::external(format!(
+                    "disk:power_cut: disk `{id}` has no VM to cut power to"
+                )));
+            };
+            vm.power_cut_disk(&id).map_err(mlua::Error::external)?;
+            Ok(())
+        });
         methods.add_method("detach", |_, this, ()| {
             let (id, vm) = {
                 let mut g = this.inner.lock().unwrap();

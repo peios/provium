@@ -1592,6 +1592,36 @@ impl Vm {
         r.map_err(VmError::Vmm)
     }
 
+    /// Discard every write the guest has not flushed to a mediated
+    /// disk — an exact power cut.
+    ///
+    /// What survives is precisely what the guest made durable, which is
+    /// the entire point: killing QEMU instead would leave unflushed
+    /// data sitting in the *host* page cache, where it outlives the
+    /// process, and a durability test would find everything intact
+    /// having demonstrated nothing.
+    ///
+    /// The guest's own page cache is untouched and still holds what it
+    /// wrote, so a test must reboot before reading back — otherwise it
+    /// is reading the guest's memory rather than the disk.
+    pub fn power_cut_disk(&self, disk_id: &str) -> Result<(), VmError> {
+        let inner = self.inner.lock().unwrap();
+        if !matches!(inner.state, VmState::Booted | VmState::Paused) {
+            return Err(self.wrong_state(inner.state, "power_cut_disk"));
+        }
+        let instance = inner
+            .running
+            .as_ref()
+            .and_then(|r| r.instance.as_ref())
+            .ok_or_else(|| self.wrong_state(inner.state, "power_cut_disk"))?;
+        let r = instance.power_cut_disk(disk_id);
+        drop(inner);
+        if let Err(e) = &r {
+            self.maybe_mark_dead_on_vmm_err(e);
+        }
+        r.map_err(VmError::Vmm)
+    }
+
     /// Hot-unplug a disk via the backend.
     pub fn detach_disk(&self, disk_id: &str) -> Result<(), VmError> {
         let inner = self.inner.lock().unwrap();
