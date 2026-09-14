@@ -252,7 +252,7 @@ impl QemuVmm {
         }
 
         let mut cid_attempts = 0u32;
-        let (cid, scratch, console_log, console_socket, child, qmp, memory_bytes, cpus) = 'launch: loop {
+        let (cid, scratch, console_log, console_socket, child, qmp, memory_bytes, cpus, mediated) = 'launch: loop {
         // 2. CID + scratch dir. The scratch directory is named by the
         // CID and created with a plain (non-recursive) create_dir, which
         // is atomic on every filesystem provium runs on: whichever
@@ -353,6 +353,47 @@ impl QemuVmm {
         };
         let cmdline = prepared.cmdline.clone();
 
+        // 2d. Mediated disks. Each gets an NBD server of provium's own,
+        //     listening on a socket in this VM's scratch directory, and
+        //     QEMU is pointed at that instead of the image. The servers
+        //     are declared here, inside the CID-retry loop, so a launch
+        //     that restarts drops the previous attempt's servers and
+        //     their sockets rather than leaking them.
+        //
+        //     The socket lives beside the QMP one because a unix socket
+        //     address is capped at 108 bytes: the default scratch root
+        //     is under /tmp and leaves plenty of room, but a caller that
+        //     overrides it with something deeply nested will be told so
+        //     by the bind, naming the socket.
+        let mut mediated: Vec<(String, crate::nbd::MediatedDisk)> = Vec::new();
+        let mut launch_disks: Vec<LaunchDisk> = Vec::with_capacity(disks.len());
+        for disk in &disks {
+            if disk.mediated {
+                let socket = scratch.join(format!("{}.nbd.sock", disk.id));
+                let server = crate::nbd::MediatedDisk::start(&disk.path, &socket)
+                    .map_err(|e| {
+                        VmmError::Io(std::io::Error::other(format!(
+                            "mediated disk `{}`: {e}",
+                            disk.id
+                        )))
+                    })?;
+                launch_disks.push(LaunchDisk {
+                    id: disk.id.clone(),
+                    file: opt_value_str(&server.qemu_url()),
+                    readonly: disk.readonly,
+                    mediated: true,
+                });
+                mediated.push((disk.id.clone(), server));
+            } else {
+                launch_disks.push(LaunchDisk {
+                    id: disk.id.clone(),
+                    file: opt_value(&disk.path),
+                    readonly: disk.readonly,
+                    mediated: false,
+                });
+            }
+        }
+
         let plan = QemuLaunchPlan {
             qemu_binary: &self.config.qemu_binary,
             vm_name: name,
@@ -366,7 +407,7 @@ impl QemuVmm {
             console_log: &console_log,
             console_socket: &console_socket,
             nics: &opts.nic_attachments,
-            disks: &disks,
+            disks: &launch_disks,
             ksm_enabled: self.config.ksm_enabled,
             rng_seed: opts.rng_seed,
             initial_time_ns: opts.initial_time_ns,
@@ -470,7 +511,7 @@ impl QemuVmm {
                 }
             }
         };
-        break (cid, scratch, console_log, console_socket, child, qmp, memory_bytes, cpus);
+        break (cid, scratch, console_log, console_socket, child, qmp, memory_bytes, cpus, mediated);
         };
 
         // 4b. If we launched with `-incoming`, drain the inbound
@@ -555,6 +596,7 @@ impl QemuVmm {
             child: Mutex::new(Some(child)),
             qmp: Mutex::new(Some(qmp)),
             scratch,
+            mediated,
         });
         let summary = BootSummary {
             guest_os: profile.guest_os.clone(),
@@ -576,6 +618,25 @@ impl QemuVmm {
 // ---------------------------------------------------------------------------
 // Command line construction
 // ---------------------------------------------------------------------------
+
+/// One disk as QEMU is *told* about it.
+///
+/// Deliberately not [`super::AttachedDisk`], which is what the caller
+/// asked for. A mediated disk's bytes reach QEMU through provium's own
+/// NBD server, so the `file=` value is a URL rather than an image path,
+/// and nothing downstream should have to know which it is holding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaunchDisk {
+    /// QEMU drive id, and the name the `-device` refers back to.
+    pub id: String,
+    /// The `file=` value, already escaped for an option string.
+    pub file: String,
+    /// Attach read-only.
+    pub readonly: bool,
+    /// Provium is serving this disk, so the drive also needs
+    /// `cache=none` — see the comment where the option is emitted.
+    pub mediated: bool,
+}
 
 /// Frozen view of the inputs to [`build_qemu_command`]. Holding the
 /// borrows in one struct keeps the function signature and tests
@@ -613,7 +674,7 @@ pub struct QemuLaunchPlan<'a> {
     /// Block devices — each emits a `-drive if=none` / `-device
     /// virtio-blk-pci` pair, in order, so the guest names them
     /// `/dev/vda`, `/dev/vdb`, … by position.
-    pub disks: &'a [super::AttachedDisk],
+    pub disks: &'a [LaunchDisk],
     /// `true` enables `merge=on` on the memory backend (KSM-eligible);
     /// `false` emits `merge=off` so VMs opt out per `--no-ksm`.
     pub ksm_enabled: bool,
@@ -779,8 +840,18 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
         let mut drive = format!(
             "if=none,id={id},format=raw,file={file}",
             id = disk.id,
-            file = opt_value(&disk.path),
+            file = disk.file,
         );
+        if disk.mediated {
+            // `cache=none` is not an optimisation here, it is the
+            // correctness condition. Anything QEMU can satisfy from its
+            // own cache is a read the server never sees, and — worse —
+            // a writethrough drive would set FUA on every write, making
+            // each one durable the instant it arrives. A power-cut test
+            // against that drive would find everything survived and
+            // report durability it never demonstrated.
+            drive.push_str(",cache=none");
+        }
         if disk.readonly {
             drive.push_str(",readonly=on");
         }
@@ -962,7 +1033,14 @@ fn path_arg(p: &Path) -> String {
 /// a garbage `-drive` option, and QEMU's complaint is about the
 /// fragment rather than the path.
 fn opt_value(p: &Path) -> String {
-    p.to_string_lossy().replace(',', ",,")
+    opt_value_str(&p.to_string_lossy())
+}
+
+/// As [`opt_value`], for a value that was never a path — a mediated
+/// disk's `nbd+unix://` URL. The comma rule is QEMU's option parser's,
+/// so it applies to whatever the value happens to be.
+fn opt_value_str(s: &str) -> String {
+    s.replace(',', ",,")
 }
 
 fn validate_profile_paths(profile: &Profile, kernel: &Path) -> Result<(), VmmError> {
@@ -1137,6 +1215,10 @@ struct QemuBackend {
     child: Mutex<Option<Child>>,
     qmp: Mutex<Option<Qmp>>,
     scratch: PathBuf,
+    /// NBD servers for this VM's mediated disks, by disk id. Owned here
+    /// so they stop when the VM does — a server outliving its guest
+    /// would keep a socket alive for a machine that no longer exists.
+    mediated: Vec<(String, crate::nbd::MediatedDisk)>,
 }
 
 impl Backend for QemuBackend {
@@ -1216,6 +1298,24 @@ impl Backend for QemuBackend {
             .ok_or(VmmError::Unimplemented("VM already shut down"))?;
         let args = serde_json::json!({ "name": netdev_id, "up": up });
         qmp.execute("set_link", args)?;
+        Ok(())
+    }
+
+    fn power_cut_disk(&self, disk_id: &str) -> Result<(), VmmError> {
+        // Naming the disk matters: "not mediated" and "no such disk"
+        // are different mistakes, and a test that silently power-cut
+        // nothing would report durability it never demonstrated.
+        let (_, server) = self
+            .mediated
+            .iter()
+            .find(|(id, _)| id == disk_id)
+            .ok_or_else(|| {
+                VmmError::Io(std::io::Error::other(format!(
+                    "disk `{disk_id}` is not mediated — `power_cut` needs \
+                     `mediated = true` on the disk when the VM boots"
+                )))
+            })?;
+        server.power_cut();
         Ok(())
     }
 
@@ -1415,15 +1515,17 @@ mod tests {
     #[test]
     fn each_disk_emits_a_drive_and_a_virtio_blk_device() {
         let disks = [
-            super::super::AttachedDisk {
+            LaunchDisk {
                 id: "medium".into(),
-                path: PathBuf::from("/img/peios.iso"),
+                file: "/img/peios.iso".into(),
                 readonly: true,
+                mediated: false,
             },
-            super::super::AttachedDisk {
+            LaunchDisk {
                 id: "target".into(),
-                path: PathBuf::from("/img/blank.img"),
+                file: "/img/blank.img".into(),
                 readonly: false,
+                mediated: false,
             },
         ];
         let mut plan = fake_plan(
@@ -1451,10 +1553,19 @@ mod tests {
 
     #[test]
     fn a_comma_in_a_disk_path_is_escaped_for_the_option_string() {
-        let disks = [super::super::AttachedDisk {
+        // The escaping now happens where the `file=` value is built,
+        // because a mediated disk's value was never a path. Assert it
+        // at its new home, and that the command builder passes an
+        // already-escaped value through untouched — between them that
+        // is what the single old assertion covered.
+        let escaped = opt_value(Path::new("/build/peios,2026.9/peios.iso"));
+        assert_eq!(escaped, "/build/peios,,2026.9/peios.iso");
+
+        let disks = [LaunchDisk {
             id: "medium".into(),
-            path: PathBuf::from("/build/peios,2026.9/peios.iso"),
+            file: escaped,
             readonly: false,
+            mediated: false,
         }];
         let mut plan = fake_plan(
             7,
@@ -1485,6 +1596,87 @@ mod tests {
     }
 
     #[test]
+    fn a_mediated_disk_points_qemu_at_the_server_and_refuses_to_cache() {
+        // `cache=none` is the correctness condition rather than a
+        // tuning knob. A read QEMU satisfies from its own cache is a
+        // read the server never sees, and a writethrough drive would
+        // set FUA on every write — making each durable on arrival, so a
+        // power-cut test would find everything survived having proven
+        // nothing.
+        let disks = [LaunchDisk {
+            id: "state".into(),
+            file: "nbd+unix:///?socket=/tmp/provium-qemu/vm-7/state.nbd.sock".into(),
+            readonly: false,
+            mediated: true,
+        }];
+        let mut plan = fake_plan(
+            7,
+            Path::new("/k"),
+            Path::new("/i"),
+            Path::new("/qmp"),
+            Path::new("/log"),
+        );
+        plan.disks = &disks;
+        let args = collect_args(&build_qemu_command(&plan));
+        assert_eq!(
+            arg_after(&args, "-drive").as_deref(),
+            Some(
+                "if=none,id=state,format=raw,\
+                 file=nbd+unix:///?socket=/tmp/provium-qemu/vm-7/state.nbd.sock,cache=none"
+            ),
+        );
+        // Whatever provium does underneath, the guest must still find
+        // an ordinary disk.
+        assert!(
+            args_after_all(&args, "-device")
+                .contains(&"virtio-blk-pci,drive=state".to_owned()),
+            "got {args:?}"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_disk_is_left_uncached_by_the_mediation_option() {
+        // The other half of the pair: `cache=none` must not leak onto
+        // disks nobody asked to mediate, where it would silently change
+        // the I/O behaviour of every existing profile.
+        let disks = [LaunchDisk {
+            id: "medium".into(),
+            file: "/img/peios.iso".into(),
+            readonly: false,
+            mediated: false,
+        }];
+        let mut plan = fake_plan(
+            7,
+            Path::new("/k"),
+            Path::new("/i"),
+            Path::new("/qmp"),
+            Path::new("/log"),
+        );
+        plan.disks = &disks;
+        let args = collect_args(&build_qemu_command(&plan));
+        assert_eq!(
+            arg_after(&args, "-drive").as_deref(),
+            Some("if=none,id=medium,format=raw,file=/img/peios.iso"),
+        );
+    }
+
+    #[test]
+    fn a_profiles_mediated_flag_reaches_the_launch() {
+        let mut profile = fake_profile();
+        profile.disks = vec![crate::profile::DiskSpec {
+            path: PathBuf::from("/img/state.img"),
+            id: Some("state".into()),
+            readonly: false,
+            mediated: true,
+        }];
+        let resolved = super::super::resolve_disks(&profile, &[]).unwrap();
+        assert!(
+            resolved[0].mediated,
+            "a profile that asks for mediation must get it"
+        );
+    }
+
+    #[test]
     fn profile_disks_precede_boot_disks_and_default_ids_do_not_collide() {
         let mut profile = fake_profile();
         profile.disks = vec![
@@ -1492,17 +1684,20 @@ mod tests {
                 path: PathBuf::from("/img/peios.iso"),
                 id: None,
                 readonly: true,
+                mediated: false,
             },
             crate::profile::DiskSpec {
                 path: PathBuf::from("/img/second.img"),
                 id: Some("scratch".into()),
                 readonly: false,
+                mediated: false,
             },
         ];
         let boot = [super::super::AttachedDisk {
             id: "boot0".into(),
             path: PathBuf::from("/img/blank.img"),
             readonly: false,
+            mediated: false,
         }];
         let resolved = super::super::resolve_disks(&profile, &boot).unwrap();
         let ids: Vec<&str> = resolved.iter().map(|d| d.id.as_str()).collect();
@@ -1516,11 +1711,13 @@ mod tests {
             path: PathBuf::from("/img/peios.iso"),
             id: Some("medium".into()),
             readonly: true,
+            mediated: false,
         }];
         let boot = [super::super::AttachedDisk {
             id: "medium".into(),
             path: PathBuf::from("/img/other.img"),
             readonly: false,
+            mediated: false,
         }];
         match super::super::resolve_disks(&profile, &boot) {
             Err(VmmError::DiskConflict(id)) => assert_eq!(id, "medium"),

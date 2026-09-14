@@ -90,6 +90,10 @@ pub struct AttachedDisk {
     pub path: PathBuf,
     /// Attach read-only.
     pub readonly: bool,
+    /// Serve this disk through provium's own NBD server rather than
+    /// giving QEMU the path, so writes can be held until the guest
+    /// flushes and a power cut can drop exactly the rest.
+    pub mediated: bool,
 }
 
 /// Merge a profile's disks with a boot's own into one launch list.
@@ -109,6 +113,7 @@ pub fn resolve_disks(
             id: spec.resolved_id(i),
             path: spec.path.clone(),
             readonly: spec.readonly,
+            mediated: spec.mediated,
         });
     }
     for disk in boot_disks {
@@ -287,6 +292,12 @@ impl VmInstance {
         self.backend.attach_disk(disk_id, image, readonly)
     }
 
+    /// Drop every unflushed write to a mediated disk — an exact power
+    /// cut. Errors on a disk the backend is not mediating.
+    pub fn power_cut_disk(&self, disk_id: &str) -> Result<(), VmmError> {
+        self.backend.power_cut_disk(disk_id)
+    }
+
     /// vsock CID assigned at boot.
     pub fn cid(&self) -> u32 {
         self.cid
@@ -374,6 +385,18 @@ pub(crate) trait Backend: Send + Sync {
         _readonly: bool,
     ) -> Result<(), VmmError> {
         Ok(())
+    }
+
+    /// Discard every write the guest has not flushed to this disk.
+    ///
+    /// Unlike its neighbours above, the default is an **error** rather
+    /// than a silent no-op. Those describe a device a backend without a
+    /// machine can reasonably ignore; this one is an assertion about
+    /// durability, and a backend that quietly "succeeded" at cutting
+    /// power would let a test conclude data survived a crash that never
+    /// happened. Failing loudly is the only safe default.
+    fn power_cut_disk(&self, _disk_id: &str) -> Result<(), VmmError> {
+        Err(VmmError::Unimplemented("backend power_cut_disk"))
     }
 }
 
