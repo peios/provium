@@ -68,6 +68,18 @@ const AGENT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 /// Bound on how long QMP `quit` will block before we SIGKILL the
 /// child as a backstop.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+/// How long to wait for QEMU's `RESET` event after asking for a reset.
+///
+/// This is the machine acknowledging the reset, not the guest finishing
+/// a boot, so it should be near-instant; the allowance is for a loaded
+/// host rather than for anything the guest does.
+///
+/// It is load-bearing beyond mere reporting: `reset` must not restore
+/// the reboot action until this event has arrived. See the comment
+/// there.
+const RESET_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Maximum time to wait for an inbound migration (`-incoming`) to
 /// finish loading the snapshot before declaring the restore failed.
 /// The migration is dominated by snapshot file I/O — fast on a
@@ -768,7 +780,16 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
     cmd.args([
         "-chardev",
         &format!(
-            "socket,id=conserial0,path={},server=on,wait=off,logfile={}",
+            // `logappend=on` matters on a reset. QEMU reopens the
+            // chardev's logfile when the machine resets, and its default
+            // is to TRUNCATE — so a rebooted guest rewrites the log from
+            // the start and the previous boot's output is gone. That
+            // makes the console useless as evidence exactly when it is
+            // most wanted, and worse, actively misleading: a second boot
+            // producing the same output leaves a byte-identical file, so
+            // "the guest rebooted" and "nothing happened at all" look
+            // the same. Diagnosing PEI-1112 walked into precisely that.
+            "socket,id=conserial0,path={},server=on,wait=off,logfile={},logappend=on",
             path_arg(plan.console_socket),
             path_arg(plan.console_log),
         ),
@@ -1266,7 +1287,78 @@ impl Backend for QemuBackend {
         let qmp = qmp
             .as_ref()
             .ok_or(VmmError::Unimplemented("VM already shut down"))?;
-        qmp.execute("system_reset", serde_json::Value::Null)?;
+
+        // We launch with `-no-reboot` so a guest panic exits rather than
+        // looping into the same broken state. That flag is the legacy
+        // spelling of `-action reboot=shutdown`, and QEMU applies it to
+        // *every* reset request rather than only guest-initiated ones —
+        // so a bare `system_reset` here shut the machine down instead of
+        // resetting it. The guest never came back from `vm:reset()`
+        // because there was no longer a guest (PEI-1112).
+        //
+        // So lift the action for our own reset and put it back after,
+        // leaving the guest-panic behaviour intact.
+        //
+        // **The restore must not happen until the RESET event has
+        // arrived**, and that ordering is the second half of PEI-1112.
+        // Restoring as soon as `system_reset` returned killed the guest:
+        // QEMU exited silently, rc=0, with not one further byte of
+        // console output — which is exactly what "the guest never came
+        // back" looked like. Waiting for RESET first, the guest re-runs
+        // its boot path and the machine stays up.
+        //
+        // Measured in isolation against the peinit kernel, counting
+        // kernel banners rather than console bytes: restore-immediately
+        // is dead at one RESET; restore-after-RESET reaches two banners
+        // and stays alive, 4 runs out of 4.
+        //
+        // A further reset does arrive later, while the guest is booting,
+        // and it does *not* exit QEMU despite the action being back to
+        // `shutdown` by then — so QEMU is evidently treating that one as
+        // exempt. An earlier version of this drained resets until a
+        // quiet spell before restoring; it drained zero every time and
+        // only added three seconds to every reset, so it is gone.
+        let mark = qmp.event_mark();
+        qmp.execute("set-action", serde_json::json!({ "reboot": "reset" }))?;
+        let reset = qmp.execute("system_reset", serde_json::Value::Null);
+
+        // Waiting here is also what makes `reset()` honest: without it
+        // the call returns having only *asked*, and a caller that
+        // immediately probes the guest can be answered by the agent of
+        // the boot it just replaced — a successful reset that never
+        // happened.
+        let landed = reset.and_then(|_| {
+            qmp.wait_event("RESET", mark, |_| true, RESET_EVENT_TIMEOUT)
+                .map(|_| ())
+        });
+
+        // Deliberately NOT restored here — see `end_reset_window`.
+        //
+        // What was measured, with a 0.5s sampler: restoring here, the
+        // guest completes its first boot, the reset lands, and the QEMU
+        // process is gone within a second — silently, empty stderr.
+        // Deferring the restore until the guest answers again, the same
+        // guest reboots fully and stays up. That is the whole of the
+        // evidence, and it is what this split is based on.
+        //
+        // The mechanism is INFERRED and not established: presumably the
+        // reboot issues a further reset of its own, which meets an
+        // action already put back to `shutdown` and exits. Against that,
+        // a standalone QEMU driven through this exact sequence reboots
+        // every time whether the restore is deferred or not, so the
+        // replica cannot discriminate and something about provium's
+        // context still differs. Do not treat the explanation as settled
+        // — only the ordering requirement is.
+        landed?;
+        Ok(())
+    }
+
+    fn end_reset_window(&self) -> Result<(), VmmError> {
+        let qmp = self.qmp.lock().unwrap();
+        let qmp = qmp
+            .as_ref()
+            .ok_or(VmmError::Unimplemented("VM already shut down"))?;
+        qmp.execute("set-action", serde_json::json!({ "reboot": "shutdown" }))?;
         Ok(())
     }
 
