@@ -49,7 +49,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::FileExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -224,6 +224,10 @@ struct Shared {
     /// The connection being served, if any, so dropping the handle can
     /// break a thread blocked reading from it.
     current: Mutex<Option<UnixStream>>,
+    /// Clients that have connected. Lets a test assert a guest actually
+    /// opened the export, rather than infer it from the absence of a
+    /// crash.
+    connections: AtomicU64,
 }
 
 /// A running NBD server for one disk image.
@@ -267,6 +271,7 @@ impl MediatedDisk {
             }),
             shutdown: AtomicBool::new(false),
             current: Mutex::new(None),
+            connections: AtomicU64::new(0),
         });
 
         let thread_shared = Arc::clone(&shared);
@@ -296,6 +301,11 @@ impl MediatedDisk {
     /// Number of `FLUSH` commands served so far.
     pub fn flushes(&self) -> u64 {
         self.shared.state.lock().unwrap().flushes
+    }
+
+    /// Number of clients that have connected since the server started.
+    pub fn connections(&self) -> u64 {
+        self.shared.connections.load(Ordering::SeqCst)
     }
 
     /// Sectors currently written but not flushed.
@@ -346,6 +356,7 @@ fn accept_loop(listener: UnixListener, shared: Arc<Shared>) {
                 if stream.set_nonblocking(false).is_err() {
                     continue;
                 }
+                shared.connections.fetch_add(1, Ordering::SeqCst);
                 if let Ok(clone) = stream.try_clone() {
                     *shared.current.lock().unwrap() = Some(clone);
                 }
