@@ -54,7 +54,11 @@ end)
 }
 
 #[test]
-#[ignore = "LocalAgentVmm doesn't implement reset; needs QemuVmm"]
+// The assertion below is deliberately weak — it is what a VM with no
+// machine can say. Real coverage, against a booted guest, is in
+// `tests/kvm_lifecycle.rs`; this `vm:state()` check stayed true
+// throughout all three of PEI-1112's reset faults (PEI-1119).
+#[ignore = "LocalAgentVmm has no machine to reset; real coverage is tests/kvm_lifecycle.rs"]
 fn reset_from_booted_succeeds() {
     let outcome = run_local_lua(
         r#"
@@ -71,7 +75,8 @@ end)
 }
 
 #[test]
-#[ignore = "LocalAgentVmm doesn't implement power_button; needs QemuVmm"]
+// As above: real coverage is in `tests/kvm_lifecycle.rs`.
+#[ignore = "LocalAgentVmm has no machine to power off; real coverage is tests/kvm_lifecycle.rs"]
 fn power_button_from_booted_succeeds() {
     let outcome = run_local_lua(
         r#"
