@@ -17,7 +17,7 @@
 
 use std::process::Command;
 
-use crate::bridge::{Bridge, DirectionalImpairment};
+use crate::bridge::Bridge;
 
 /// Plan describing the host-network commands that realise a bridge.
 ///

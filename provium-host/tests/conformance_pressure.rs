@@ -2,9 +2,7 @@
 //! pressure. PressureFlag construction, default-clear, set/clear
 //! visibility, parser graceful-degradation.
 
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use provium_host::scheduler::psi::{
     read_some_avg10, read_some_avg10_at, PressureFlag,

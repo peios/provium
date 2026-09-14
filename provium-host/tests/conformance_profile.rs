@@ -36,23 +36,31 @@ cmdline = ""
 "#;
     match Config::from_toml_str(toml, Path::new("test.toml")) {
         Err(ConfigError::Validation { message, .. }) => {
-            assert!(message.contains("cmdline"),
-                "validation error must mention cmdline: {message}");
+            assert!(
+                message.contains("cmdline"),
+                "validation error must mention cmdline: {message}"
+            );
         }
         other => panic!("expected Validation error, got {other:?}"),
     }
 }
 
 #[test]
-fn missing_kernel_fails_parse() {
+fn omitted_kernel_is_resolved_when_the_profile_is_booted() {
     let toml = r#"
 [profiles.peios]
 initrd = "/i"
 cmdline = "x"
 "#;
-    let r = Config::from_toml_str(toml, Path::new("test.toml"));
-    assert!(matches!(r, Err(ConfigError::Parse { .. })),
-        "missing kernel must fail at parse time: {r:?}");
+    // Directory profiles may discover the kernel in their composed
+    // root, so its presence is checked when resolving the boot image.
+    let cfg = Config::from_toml_str(toml, Path::new("test.toml")).unwrap();
+    let profile = cfg.profile("peios").unwrap();
+    assert!(profile.kernel.as_os_str().is_empty());
+    assert!(
+        profile.resolve_kernel().is_err(),
+        "neither kernel nor root was supplied"
+    );
 }
 
 #[test]

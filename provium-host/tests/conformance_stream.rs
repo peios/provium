@@ -138,17 +138,20 @@ end)
 }
 
 #[test]
-fn tail_file_negative_offset_rejected() {
+fn tail_file_negative_offset_reads_from_end_and_clamps_to_start() {
     let outcome = run_local_lua(
         r#"
-test("tail neg offset", function(t)
+test("tail negative offset", function(t)
     local tmp = os.tmpname()
-    local f = io.open(tmp, "w"); f:close()
+    local f = io.open(tmp, "w"); f:write("abcdef"); f:close()
     local vm = provium:vm("a", "peios"):boot()
-    local ok = pcall(function()
-        vm:tail_file(tmp, {start = -1})
-    end)
-    t:assert(not ok, "negative offset should error")
+    local tail = vm:tail_file(tmp, {start = -2})
+    t:assert_eq(tail:next("1s"), "ef")
+    tail:close()
+    local whole = vm:tail_file(tmp, {start = -100})
+    t:assert_eq(whole:next("1s"), "abcdef")
+    whole:close()
+    os.remove(tmp)
 end)
 "#,
     );

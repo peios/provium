@@ -707,6 +707,8 @@ impl Bridge {
         Ok(())
     }
 
+    /// Apply the configured bandwidth and network impairments to the
+    /// realized bridge. Does nothing until the bridge is realized.
     pub fn refresh_bandwidth(&self) -> std::io::Result<()> {
         let (bps, lat, drop, realized) = {
             let inner = self.inner.lock().unwrap();

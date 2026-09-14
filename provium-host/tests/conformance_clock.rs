@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{assert_one_failed_with, assert_one_passed, run_local_lua};
+use common::{assert_one_passed, run_local_lua};
 
 #[test]
 fn get_returns_seconds_as_float() {
