@@ -167,8 +167,17 @@ pub fn prepare_initrd(
     if !merged_path.exists() {
         // Write to a temp file in the same dir, then rename — avoids
         // a partial-write being seen as a "cache hit" by a sibling
-        // launch racing the same key.
-        let tmp = cache_dir.join(format!(".{key}.partial"));
+        // launch racing the same key. The temp name is per writer:
+        // a dozen launches missing the cache together after a
+        // recompose used to share one `.<key>.partial`, so the first
+        // rename took it from under the rest (ENOENT for them) and
+        // two writers could interleave on one file (PEI-1118).
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = cache_dir.join(format!(
+            ".{key}.{}.{seq}.partial",
+            std::process::id()
+        ));
         let mut f = fs::File::create(&tmp).map_err(|e| {
             VmmError::AgentOverlay(format!(
                 "create cache file `{}`: {e}",
@@ -182,13 +191,18 @@ pub fn prepare_initrd(
             VmmError::AgentOverlay(format!("write merged initrd: {e}"))
         })?;
         drop(f);
-        fs::rename(&tmp, &merged_path).map_err(|e| {
-            VmmError::AgentOverlay(format!(
-                "rename `{}` -> `{}`: {e}",
-                tmp.display(),
-                merged_path.display(),
-            ))
-        })?;
+        if let Err(e) = fs::rename(&tmp, &merged_path) {
+            // A sibling that finished first has installed a complete
+            // entry (the rename into place is atomic); ours is surplus.
+            let _ = fs::remove_file(&tmp);
+            if !merged_path.exists() {
+                return Err(VmmError::AgentOverlay(format!(
+                    "rename `{}` -> `{}`: {e}",
+                    tmp.display(),
+                    merged_path.display(),
+                )));
+            }
+        }
     }
 
     let augmented_cmdline = with_rdinit(cmdline);
