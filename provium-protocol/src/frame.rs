@@ -8,7 +8,7 @@
 //!
 //! # Encoding choice
 //!
-//! Bodies are encoded with `rmp_serde::to_vec_named`, which preserves
+//! Bodies use the named-map encoding of `rmp_serde::to_vec_named`, preserving
 //! struct field names. Combined with the [`crate::PROTOCOL_VERSION`]
 //! check at handshake, this gives defence-in-depth against version skew:
 //! adding a field is a strict version bump, but a buggy "compatible"
@@ -51,41 +51,82 @@ const HEADER_LEN: usize = 4;
 /// end-of-conversation signal for a short op. Returns
 /// [`FrameError::UnexpectedEof`] if the connection closes part-way
 /// through a header or body.
+/// For connections where I/O timeouts are retried, keep a
+/// [`FrameReader`] instead of calling this one-shot helper again.
 pub fn read_frame<R, T>(reader: &mut R, max_body_bytes: usize) -> Result<T, FrameError>
 where
     R: Read,
     T: DeserializeOwned,
 {
-    let mut header = [0u8; HEADER_LEN];
-    match read_full(reader, &mut header)? {
-        0 => return Err(FrameError::Eof),
-        n if n < HEADER_LEN => {
-            return Err(FrameError::UnexpectedEof {
-                bytes_read: n,
-                expected: HEADER_LEN,
+    FrameReader::new(max_body_bytes).read(reader)
+}
+
+/// Stateful frame decoder for a single connection.
+///
+/// Partial headers and bodies survive I/O timeouts (`WouldBlock` or
+/// `TimedOut`): call [`Self::read`] again on the same byte stream to
+/// resume. Interrupted reads are retried internally. Other errors are
+/// terminal; discard the decoder and its connection. The body buffer
+/// is reused between frames to avoid allocating on each stream chunk.
+#[derive(Debug)]
+pub struct FrameReader {
+    max_body_bytes: usize,
+    header: [u8; HEADER_LEN],
+    header_read: usize,
+    body: Vec<u8>,
+    body_read: usize,
+}
+
+impl FrameReader {
+    /// Create a decoder with the given per-frame body size limit.
+    pub fn new(max_body_bytes: usize) -> Self {
+        Self {
+            max_body_bytes,
+            header: [0; HEADER_LEN],
+            header_read: 0,
+            body: Vec::new(),
+            body_read: 0,
+        }
+    }
+
+    /// Decode the next frame, resuming any partially received frame.
+    /// Does not read ahead into subsequent frames.
+    pub fn read<R: Read, T: DeserializeOwned>(&mut self, reader: &mut R) -> Result<T, FrameError> {
+        read_full(reader, &mut self.header, &mut self.header_read)?;
+        match self.header_read {
+            0 => return Err(FrameError::Eof),
+            n if n < HEADER_LEN => {
+                return Err(FrameError::UnexpectedEof {
+                    bytes_read: n,
+                    expected: HEADER_LEN,
+                });
+            }
+            _ => {}
+        }
+
+        let body_len = u32::from_be_bytes(self.header) as usize;
+        if body_len > self.max_body_bytes {
+            return Err(FrameError::FrameTooLarge {
+                len: body_len,
+                max: self.max_body_bytes,
             });
         }
-        _ => {}
-    }
 
-    let body_len = u32::from_be_bytes(header) as usize;
-    if body_len > max_body_bytes {
-        return Err(FrameError::FrameTooLarge {
-            len: body_len,
-            max: max_body_bytes,
-        });
-    }
+        self.body.resize(body_len, 0);
+        read_full(reader, &mut self.body, &mut self.body_read)?;
+        if self.body_read < body_len {
+            return Err(FrameError::UnexpectedEof {
+                bytes_read: self.body_read,
+                expected: body_len,
+            });
+        }
 
-    let mut body = vec![0u8; body_len];
-    let read = read_full(reader, &mut body)?;
-    if read < body_len {
-        return Err(FrameError::UnexpectedEof {
-            bytes_read: read,
-            expected: body_len,
-        });
+        let message = rmp_serde::from_slice(&self.body)?;
+        self.header_read = 0;
+        self.body_read = 0;
+        self.body.clear();
+        Ok(message)
     }
-
-    Ok(rmp_serde::from_slice(&body)?)
 }
 
 /// Encode `message` as a single msgpack frame and write it to `writer`.
@@ -103,42 +144,47 @@ where
     W: Write,
     T: Serialize,
 {
-    let body = rmp_serde::to_vec_named(message)?;
-    if body.len() > max_body_bytes {
+    // Encode directly after the reserved header, avoiding a second
+    // allocation and full-body copy for every frame.
+    let mut buf = Vec::with_capacity(128);
+    buf.resize(HEADER_LEN, 0);
+    message.serialize(&mut rmp_serde::Serializer::new(&mut buf).with_struct_map())?;
+    let body_len = buf.len() - HEADER_LEN;
+    let max_body_bytes = max_body_bytes.min(u32::MAX as usize);
+    if body_len > max_body_bytes {
         return Err(FrameError::FrameTooLarge {
-            len: body.len(),
+            len: body_len,
             max: max_body_bytes,
         });
     }
-    // u32 fit guaranteed by the cap check above; the cap fits in u32.
     // Coalesce header + body into a single write call so any
     // advisory `flock(LOCK_EX)` on the underlying writer (see
     // `provium-host`'s `LockedFile`) covers the whole frame
     // atomically. With two separate write_all calls a concurrent
     // process could insert its own header between ours and the
     // body — leaving torn frames that crash readers.
-    let mut buf = Vec::with_capacity(4 + body.len());
-    buf.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    buf.extend_from_slice(&body);
+    buf[..HEADER_LEN].copy_from_slice(&(body_len as u32).to_be_bytes());
     writer.write_all(&buf)?;
     Ok(())
 }
 
 /// Read until `buf` is full or the reader returns 0 bytes.
 ///
-/// Returns the total number of bytes read. Distinct from
+/// Updates `total` after each read, including before an I/O error, so
+/// callers can resume after a timeout. Distinct from
 /// [`Read::read_exact`] in that it surfaces a *partial* read as a
-/// returned count rather than an error, which the caller uses to
+/// count in `total` rather than an error, which the caller uses to
 /// distinguish clean EOF (0 bytes) from mid-message EOF (1..len).
-fn read_full<R: Read>(reader: &mut R, buf: &mut [u8]) -> io::Result<usize> {
-    let mut total = 0;
-    while total < buf.len() {
-        match reader.read(&mut buf[total..])? {
-            0 => break,
-            n => total += n,
+fn read_full<R: Read>(reader: &mut R, buf: &mut [u8], total: &mut usize) -> io::Result<()> {
+    while *total < buf.len() {
+        match reader.read(&mut buf[*total..]) {
+            Ok(0) => break,
+            Ok(n) => *total += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
         }
     }
-    Ok(total)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -170,6 +216,31 @@ mod tests {
         let mut cursor = Cursor::new(&buf);
         let decoded: Sample = read_frame(&mut cursor, DEFAULT_MAX_FRAME_BYTES).unwrap();
         assert_eq!(decoded, sample());
+    }
+
+    #[test]
+    fn wire_encoding_is_unchanged_and_written_as_one_unit() {
+        #[derive(Default)]
+        struct OneWrite(Vec<u8>);
+        impl Write for OneWrite {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                assert!(
+                    self.0.is_empty(),
+                    "frame header and body must share one write"
+                );
+                self.0.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let body = rmp_serde::to_vec_named(&sample()).unwrap();
+        let mut expected = (body.len() as u32).to_be_bytes().to_vec();
+        expected.extend_from_slice(&body);
+        let mut writer = OneWrite::default();
+        write_frame(&mut writer, &sample(), body.len()).unwrap();
+        assert_eq!(writer.0, expected);
     }
 
     #[test]
@@ -234,7 +305,10 @@ mod tests {
         let mut cursor = Cursor::new(&bytes);
         let result = read_frame::<_, Sample>(&mut cursor, DEFAULT_MAX_FRAME_BYTES);
         match result {
-            Err(FrameError::UnexpectedEof { bytes_read, expected }) => {
+            Err(FrameError::UnexpectedEof {
+                bytes_read,
+                expected,
+            }) => {
                 assert_eq!(bytes_read, 2);
                 assert_eq!(expected, HEADER_LEN);
             }
@@ -251,7 +325,10 @@ mod tests {
         let mut cursor = Cursor::new(&bytes);
         let result = read_frame::<_, Sample>(&mut cursor, DEFAULT_MAX_FRAME_BYTES);
         match result {
-            Err(FrameError::UnexpectedEof { bytes_read, expected }) => {
+            Err(FrameError::UnexpectedEof {
+                bytes_read,
+                expected,
+            }) => {
                 assert_eq!(bytes_read, 8);
                 assert_eq!(expected, 16);
             }
@@ -265,5 +342,31 @@ mod tests {
         let mut cursor = Cursor::new(&bytes);
         let result = read_frame::<_, Sample>(&mut cursor, DEFAULT_MAX_FRAME_BYTES);
         assert!(matches!(result, Err(FrameError::Eof)));
+    }
+
+    #[test]
+    fn interrupted_reads_preserve_partial_header_and_body() {
+        struct InterruptedReader {
+            bytes: Cursor<Vec<u8>>,
+            interrupt: bool,
+        }
+        impl Read for InterruptedReader {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                self.interrupt = !self.interrupt;
+                if self.interrupt {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                self.bytes.read(&mut buf[..1])
+            }
+        }
+
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &sample(), DEFAULT_MAX_FRAME_BYTES).unwrap();
+        let mut reader = InterruptedReader {
+            bytes: Cursor::new(bytes),
+            interrupt: false,
+        };
+        let decoded: Sample = read_frame(&mut reader, DEFAULT_MAX_FRAME_BYTES).unwrap();
+        assert_eq!(decoded, sample());
     }
 }
