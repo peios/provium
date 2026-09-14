@@ -38,7 +38,8 @@ fn run(source: &str) -> provium_host::lua::FileOutcome {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("w.test.lua");
     std::fs::write(&path, source).unwrap();
-    let vmm: Arc<dyn Vmm> = Arc::new(LocalAgentVmm::new());
+    let vmm: Arc<dyn Vmm> = Arc::new(LocalAgentVmm::new()
+        .with_worker_executable(env!("CARGO_BIN_EXE_provium")));
     run_file(&path, config(), vmm).unwrap()
 }
 
