@@ -314,11 +314,15 @@ impl Qmp {
     {
         let deadline = Instant::now() + timeout;
         let mut log = self.inner.log.lock().unwrap();
+        let mut next_event = since.0;
 
         loop {
-            if let Some(found) = scan_for_match(&log.events, since.0, name, &predicate) {
+            if let Some(found) = scan_for_match(&log.events, next_event, name, &predicate) {
                 return Ok(found);
             }
+            // Scan only new arrivals after each wakeup, keeping a
+            // busy monitor's event processing linear in its history.
+            next_event = next_event.max(log.events.len());
 
             if log.closed {
                 return Err(QmpError::Closed(log.close_reason));
@@ -329,16 +333,12 @@ impl Qmp {
                 return Err(QmpError::Timeout(timeout));
             }
             let remaining = deadline - now;
-            let (new_log, wait_result) = self
-                .inner
-                .log_cond
-                .wait_timeout(log, remaining)
-                .unwrap();
+            let (new_log, wait_result) = self.inner.log_cond.wait_timeout(log, remaining).unwrap();
             log = new_log;
 
             if wait_result.timed_out() {
                 // Take one more pass in case a wakeup raced the timeout.
-                if let Some(found) = scan_for_match(&log.events, since.0, name, &predicate) {
+                if let Some(found) = scan_for_match(&log.events, next_event, name, &predicate) {
                     return Ok(found);
                 }
                 return Err(QmpError::Timeout(timeout));
@@ -610,12 +610,7 @@ fn await_simple_return<R: BufRead>(reader: &mut R, command: &str) -> Result<(), 
     }
 }
 
-fn scan_for_match<F>(
-    events: &[Event],
-    since: usize,
-    name: &str,
-    predicate: &F,
-) -> Option<Event>
+fn scan_for_match<F>(events: &[Event], since: usize, name: &str, predicate: &F) -> Option<Event>
 where
     F: Fn(&Event) -> bool,
 {
