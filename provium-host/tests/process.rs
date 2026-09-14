@@ -66,7 +66,7 @@ fn run_async_then_kill_then_wait_reports_signal() {
         r#"
 test("kill async", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
-    local proc = vm:run_async("sh", {"-c", "sleep 30"})
+    local proc = vm:run_async("sleep", {"30"})
     proc:kill("kill")
     local r = proc:wait()
     -- After SIGKILL the agent's wait reports a signal-termination,

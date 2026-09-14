@@ -397,10 +397,10 @@ mod tests {
         // path swallowing valid floats.
         let lua = fresh_lua();
         let n: f64 = lua
-            .load(r#"return json.decode("3.14")"#)
+            .load(r#"return json.decode("1.25")"#)
             .eval()
             .unwrap();
-        assert!((n - 3.14).abs() < 1e-9);
+        assert_eq!(n, 1.25);
     }
 
     #[test]

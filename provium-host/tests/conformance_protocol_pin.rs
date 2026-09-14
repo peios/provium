@@ -8,8 +8,7 @@
 use provium_protocol::handle::{FileHandle, ProcessHandle};
 use provium_protocol::wire::{
     AgentMessage, CloseArgs, ExecArgs, Hello, HelloOk, HostMessage,
-    OpResult, OpenFileArgs, OpenMode, ReadArgs, ReadResult,
-    SyscallArgs, SyscallResult, WaitArgs,
+    OpResult, OpenMode, ReadArgs, SyscallResult, WaitArgs,
 };
 use provium_protocol::PROTOCOL_VERSION;
 

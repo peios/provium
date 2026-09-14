@@ -70,14 +70,11 @@ test("wait timeout", function(t)
     local r = p:wait("100ms")
     -- After timeout the agent SIGKILLs and the result reports
     -- timed_out per DESIGN.
-    t:assert(r:timed_out() or not r:ok(),
-        "expected timed_out or non-ok status")
+    t:assert(r.timed_out, "wait must report its timeout")
 end)
 "#,
     );
-    // Don't strictly require pass — wait("100ms") parsing or
-    // timed_out helper may not exist; treat as documentation.
-    let _ = outcome;
+    assert_one_passed(&outcome);
 }
 
 #[test]
@@ -92,9 +89,7 @@ test("kill basic", function(t)
 end)
 "#,
     );
-    // Aspirational — process API may not expose kill in all
-    // builds; tolerate absence rather than fail.
-    let _ = outcome;
+    assert_one_passed(&outcome);
 }
 
 #[test]
@@ -103,7 +98,7 @@ fn proc_pid_returns_positive() {
         r#"
 test("proc:pid", function(t)
     local vm = provium:vm("a", "peios"):boot()
-    local p = vm:run_async("sh", {"-c", "sleep 60"})
+    local p = vm:run_async("sleep", {"60"})
     t:assert(p:pid() > 0, "pid must be positive")
     pcall(function() p:kill() end)
     pcall(function() p:wait() end)

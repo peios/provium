@@ -37,7 +37,7 @@ fn process_kill_then_drop_is_safe() {
 test("kill then drop", function(t)
     local vm = provium:vm("a", "peios"):boot()
     do
-        local p = vm:run_async("sh", {"-c", "sleep 60"})
+        local p = vm:run_async("sleep", {"60"})
         p:kill()
         -- No wait — drop guard reaps the killed process.
     end
