@@ -1219,6 +1219,47 @@ impl Backend for QemuBackend {
         Ok(())
     }
 
+    fn attach_disk(&self, disk_id: &str, image: &Path, readonly: bool) -> Result<(), VmmError> {
+        let qmp = self.qmp.lock().unwrap();
+        let qmp = qmp
+            .as_ref()
+            .ok_or(VmmError::Unimplemented("VM already shut down"))?;
+        // Two calls, because a hot-plugged disk is two objects: the
+        // block node that holds the bytes, then the guest-visible
+        // device that points at it.
+        //
+        // The node is named `<id>-node` rather than `<id>`: node names
+        // and device ids share one namespace, and the device has to
+        // take `<id>` so `detach_disk` — which addresses `device_del`
+        // by id — can find it again. (Disks attached at launch are not
+        // addressable that way: `-device virtio-blk-pci,drive=<id>`
+        // carries no `id=`, so QEMU names the device itself. That is
+        // why `device_del` there is best-effort, and it is left alone
+        // here rather than changed as a side effect of this.)
+        let node = format!("{disk_id}-node");
+        qmp.execute(
+            "blockdev-add",
+            serde_json::json!({
+                "driver": "raw",
+                "node-name": node,
+                "read-only": readonly,
+                "file": {
+                    "driver": "file",
+                    "filename": image.to_string_lossy(),
+                },
+            }),
+        )?;
+        qmp.execute(
+            "device_add",
+            serde_json::json!({
+                "driver": "virtio-blk-pci",
+                "drive": node,
+                "id": disk_id,
+            }),
+        )?;
+        Ok(())
+    }
+
     fn detach_disk(&self, disk_id: &str) -> Result<(), VmmError> {
         let qmp = self.qmp.lock().unwrap();
         let qmp = qmp

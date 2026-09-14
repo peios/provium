@@ -277,6 +277,16 @@ impl VmInstance {
         self.backend.detach_disk(disk_id)
     }
 
+    /// Hot-plug a disk via the backend.
+    pub fn attach_disk(
+        &self,
+        disk_id: &str,
+        image: &Path,
+        readonly: bool,
+    ) -> Result<(), VmmError> {
+        self.backend.attach_disk(disk_id, image, readonly)
+    }
+
     /// vsock CID assigned at boot.
     pub fn cid(&self) -> u32 {
         self.cid
@@ -349,6 +359,20 @@ pub(crate) trait Backend: Send + Sync {
     /// Hot-unplug a previously-attached disk. Default-impl is a
     /// no-op so non-QEMU backends silently ignore.
     fn detach_disk(&self, _disk_id: &str) -> Result<(), VmmError> {
+        Ok(())
+    }
+
+    /// Hot-plug a disk the guest can see, backed by `image`.
+    ///
+    /// Default-impl is a no-op, so a backend with no machine to plug
+    /// into ignores it — the host-side record still happens, which is
+    /// all `disk:read_sectors` needs.
+    fn attach_disk(
+        &self,
+        _disk_id: &str,
+        _image: &Path,
+        _readonly: bool,
+    ) -> Result<(), VmmError> {
         Ok(())
     }
 }
