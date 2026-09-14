@@ -38,6 +38,7 @@ pub mod console;
 pub mod connector;
 pub mod fixture;
 pub mod lab;
+pub mod nbd;
 pub mod perf;
 pub mod profile;
 pub mod scheduler;
