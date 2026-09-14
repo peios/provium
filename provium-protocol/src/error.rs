@@ -19,9 +19,10 @@ use thiserror::Error;
 
 /// Errors raised by the framing codec ([`crate::frame`]).
 ///
-/// All variants represent unrecoverable conditions for the current
-/// connection: the caller should drop the stream and surface the error
-/// to the test author as an infrastructure failure.
+/// Errors are terminal for a one-shot [`crate::frame::read_frame`]
+/// call. With a persistent [`crate::frame::FrameReader`], I/O timeouts
+/// (`WouldBlock` / `TimedOut`) can be retried without losing bytes.
+/// Other errors require dropping the connection.
 #[derive(Debug, Error)]
 pub enum FrameError {
     /// I/O failure on the underlying byte stream.
