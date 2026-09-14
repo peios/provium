@@ -1066,7 +1066,7 @@ impl Lab {
             file: self.name.clone(),
             vm_name: vm.name().to_owned(),
             profile: vm.profile_name().to_owned(),
-            memory_bytes: opts.memory_bytes.unwrap_or(0),
+            memory_bytes: opts.sizing().0,
             cid: vm.cid().unwrap_or(0),
         }));
         Ok(vm)
@@ -1212,19 +1212,18 @@ impl Lab {
         };
         for (_, vm) in &vms {
             if vm.state() == VmState::Created {
-                let opts = vm.boot_opts_summary();
-                // Match the solo-boot accounting (`Vm::boot`):
-                // declared memory + ~100 MB VMM overhead per VM.
-                // Without this the joint reservation undercharges
-                // by 100 MB × N and a lab of N VMs blows past the
-                // configured pool budget.
-                let per_vm_mem = opts
-                    .memory_bytes
-                    .unwrap_or(0)
-                    .saturating_add(crate::vm::VMM_OVERHEAD_BYTES);
+                // Match the solo-boot accounting (`Vm::boot`): what
+                // the VM will run with — declared or the launch
+                // defaults, via `BootOpts::sizing` — plus ~100 MB VMM
+                // overhead per VM. Without the overhead the joint
+                // reservation undercharges by 100 MB × N; without the
+                // defaults an undeclared member costs nothing while
+                // running with a vCPU and 512 MiB (PEI-1111).
+                let (memory_bytes, cpus) = vm.boot_opts_summary().sizing();
+                let per_vm_mem = memory_bytes.saturating_add(crate::vm::VMM_OVERHEAD_BYTES);
                 needed.memory_bytes =
                     needed.memory_bytes.saturating_add(per_vm_mem);
-                needed.cpus = needed.cpus.saturating_add(opts.cpus.unwrap_or(0));
+                needed.cpus = needed.cpus.saturating_add(cpus);
             }
         }
 

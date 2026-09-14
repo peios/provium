@@ -24,8 +24,6 @@ use crate::connector::{AgentStream, Connector};
 use crate::profile::Profile;
 use crate::vmm::{Backend, BootOpts, BootSummary, VmInstance, VmRunning, Vmm, VmmError};
 
-const DEFAULT_LOCAL_MEMORY: u64 = 512 * 1024 * 1024;
-const DEFAULT_LOCAL_CPUS: u32 = 1;
 
 /// VMM that spawns an in-process agent thread per connection. See the
 /// module-level docs.
@@ -93,8 +91,7 @@ impl Vmm for LocalAgentVmm {
         opts: BootOpts,
     ) -> Result<VmRunning, VmmError> {
         let cid = self.cids.allocate();
-        let memory_bytes = opts.memory_bytes.unwrap_or(DEFAULT_LOCAL_MEMORY);
-        let cpus = opts.cpus.unwrap_or(DEFAULT_LOCAL_CPUS);
+        let (memory_bytes, cpus) = opts.sizing();
 
         // The agent's state table outlives every per-connection
         // thread — the Connector clones it on each `connect()`.
