@@ -279,6 +279,76 @@ end)
 }
 
 #[test]
+fn a_guest_visible_fault_is_refused_on_an_unmediated_disk() {
+    // The two fault layers must stay tellable apart. `fault_inject` is
+    // the test's view of the image and works on any disk; a fault the
+    // *guest* sees needs mediation, and asking for one without it has
+    // to fail rather than quietly do the weaker host-side thing — a
+    // test would otherwise watch a guest sail through an error it never
+    // actually saw and call that resilience (PEI-1104).
+    let outcome = run_local_lua(
+        r#"
+test("guest faults need a mediated disk", function(t)
+    local img = os.tmpname()
+    local f = io.open(img, "w"); f:write(string.rep("\0", 1024)); f:close()
+    local vm = provium:vm("a", "peios"):boot()
+    local disk = vm:attach_disk({id="vda", size = 1024, image = img})
+
+    -- Host-side injection still works on this disk …
+    disk:fault_inject("eio_read")
+    local ok = pcall(function() disk:read_sectors(0, 1) end)
+    t:assert(not ok, "host-side eio_read must still apply")
+
+    -- … but the guest-visible verb must not pretend.
+    local ok2, err = pcall(function() disk:fail_reads() end)
+    t:assert(not ok2, "fail_reads on an unmediated disk must error")
+    t:assert(tostring(err):find("mediated"),
+        "the error must name mediation as what is missing: " .. tostring(err))
+end)
+"#,
+    );
+    assert_one_passed(&outcome);
+}
+
+#[test]
+fn fail_after_rejects_a_zero_count() {
+    let outcome = run_local_lua(
+        r#"
+test("fail_after(0)", function(t)
+    local img = os.tmpname()
+    io.open(img, "w"):close()
+    local vm = provium:vm("a", "peios"):boot()
+    local disk = vm:attach_disk({id="vda", size = 512, image = img})
+    local ok, err = pcall(function() disk:fail_after(0) end)
+    t:assert(not ok, "fail_after(0) must error")
+    t:assert(tostring(err):find("at least 1"), tostring(err))
+end)
+"#,
+    );
+    assert_one_passed(&outcome);
+}
+
+#[test]
+fn fail_range_rejects_an_empty_range() {
+    // An empty range overlaps nothing, so it would arm a fault that can
+    // never fire — indistinguishable from a passing test.
+    let outcome = run_local_lua(
+        r#"
+test("fail_range with no sectors", function(t)
+    local img = os.tmpname()
+    io.open(img, "w"):close()
+    local vm = provium:vm("a", "peios"):boot()
+    local disk = vm:attach_disk({id="vda", size = 512, image = img})
+    local ok, err = pcall(function() disk:fail_range(10, 0) end)
+    t:assert(not ok, "an empty range must error rather than never firing")
+    t:assert(tostring(err):find("at least 1"), tostring(err))
+end)
+"#,
+    );
+    assert_one_passed(&outcome);
+}
+
+#[test]
 fn detached_disk_read_errors() {
     let outcome = run_local_lua(
         r#"

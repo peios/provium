@@ -21,10 +21,10 @@
 //!
 //! # Scope
 //!
-//! This is the PEI-1104 spike: one export, one connection at a time,
-//! no fault policy, no Lua surface. It exists to establish whether
-//! QEMU's block layer gives honest semantics through an NBD server
-//! before anything gets built on top of it.
+//! One export, one connection at a time. The spike that had to
+//! establish whether QEMU's block layer gives honest semantics through
+//! an NBD server has landed; on top of it sits [`FaultPolicy`], the
+//! declarative rules that make the guest's *own* I/O fail or stall.
 //!
 //! # Protocol note
 //!
@@ -115,6 +115,44 @@ const CMD_FLAG_FUA: u16 = 1 << 0;
 // Errors are errno values on the wire.
 const NBD_EIO: u32 = 5;
 const NBD_EINVAL: u32 = 22;
+
+/// What the server should do to the guest's I/O.
+///
+/// Rust evaluates these rules; Lua only declares them. A per-I/O
+/// callback into Lua was considered and rejected: SQLite issues
+/// thousands of small writes, and re-entering mlua synchronously on the
+/// guest's I/O path would be both slow and deadlock-prone against the
+/// test's own Lua state (PEI-1104).
+///
+/// Every field is independent and the default is an empty policy — a
+/// disk that simply works.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FaultPolicy {
+    /// Fail every `READ` with `EIO`.
+    pub fail_reads: bool,
+    /// Fail every `WRITE` with `EIO`.
+    pub fail_writes: bool,
+    /// Fail the nth command the guest issues, and every one after it.
+    ///
+    /// Counts `READ`, `WRITE` and `FLUSH` alike: the model is a disk
+    /// that dies partway through a workload, and a dying disk does not
+    /// politely keep answering flushes. Counting flushes is also what
+    /// makes this the one rule that can fail a guest's `fsync`, which
+    /// `fail_writes` deliberately cannot — see [`Shared::consult`].
+    ///
+    /// The counter resets whenever a policy is set, so `1` means the
+    /// first command *after the test armed it*, not the first since
+    /// boot — by which point a booted guest has issued hundreds.
+    pub fail_after: Option<u64>,
+    /// Fail any command whose bytes overlap `count` sectors starting at
+    /// `sector`.
+    ///
+    /// Overlap fails the whole command: a simple NBD reply carries one
+    /// error for one request, so there is no way to fail half a read.
+    pub fail_range: Option<(u64, u64)>,
+    /// Sleep this long before serving each command.
+    pub delay: Option<Duration>,
+}
 
 /// The backing image plus whatever the guest has written but not yet
 /// flushed.
@@ -220,6 +258,14 @@ impl DiskState {
 /// State shared between the serving thread and the handle.
 struct Shared {
     state: Mutex<DiskState>,
+    /// The armed fault policy, behind its own lock rather than inside
+    /// [`DiskState`]. Consulting it can sleep (`delay`), and sleeping
+    /// under the disk's lock would stall the handle's accessors and
+    /// serialise every other command behind the delay.
+    policy: Mutex<FaultPolicy>,
+    /// Commands seen since the policy was last set, for
+    /// [`FaultPolicy::fail_after`].
+    io_count: AtomicU64,
     shutdown: AtomicBool,
     /// The connection being served, if any, so dropping the handle can
     /// break a thread blocked reading from it.
@@ -228,6 +274,59 @@ struct Shared {
     /// opened the export, rather than infer it from the absence of a
     /// crash.
     connections: AtomicU64,
+}
+
+impl Shared {
+    /// Apply the armed policy to one command: sleep if it asks for a
+    /// delay, and report whether the command should be failed `EIO`.
+    ///
+    /// Takes no lock across the sleep, and holds none on return, so the
+    /// caller is free to take the disk's.
+    fn consult(&self, command: u16, offset: u64, length: u32) -> bool {
+        let policy = self.policy.lock().unwrap().clone();
+        // The overwhelmingly common case is no policy at all, and this
+        // runs on every command the guest issues. Leaving early also
+        // means `io_count` only advances while a policy is armed, which
+        // is what makes `fail_after` count from the arming.
+        if policy == FaultPolicy::default() {
+            return false;
+        }
+
+        if let Some(delay) = policy.delay {
+            // Before the verdict, not after: a failing disk that is also
+            // slow is slow about failing.
+            std::thread::sleep(delay);
+        }
+
+        // Count commands that are about to fail too — a disk that has
+        // started failing is still being asked.
+        let seen = self.io_count.fetch_add(1, Ordering::SeqCst) + 1;
+        if policy.fail_after.is_some_and(|n| seen >= n) {
+            return true;
+        }
+
+        match command {
+            CMD_READ if policy.fail_reads => return true,
+            CMD_WRITE if policy.fail_writes => return true,
+            _ => {}
+        }
+
+        // A `FLUSH` carries offset 0 and length 0, so it overlaps
+        // nothing and no range rule can catch it. That is deliberate:
+        // failing a flush means telling the guest its durable data was
+        // lost, which is `fail_after`'s job alone.
+        if let Some((sector, count)) = policy.fail_range {
+            if length > 0 && count > 0 {
+                let start = sector * SECTOR as u64;
+                let end = start.saturating_add(count * SECTOR as u64);
+                let command_end = offset.saturating_add(length as u64);
+                if offset < end && start < command_end {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 /// A running NBD server for one disk image.
@@ -269,6 +368,8 @@ impl MediatedDisk {
                 overlay: BTreeMap::new(),
                 flushes: 0,
             }),
+            policy: Mutex::new(FaultPolicy::default()),
+            io_count: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
             current: Mutex::new(None),
             connections: AtomicU64::new(0),
@@ -296,6 +397,26 @@ impl MediatedDisk {
     pub fn power_cut(&self) {
         let mut state = self.shared.state.lock().unwrap();
         state.overlay.clear();
+    }
+
+    /// Arm a fault policy, replacing whatever was set before.
+    ///
+    /// Resets the [`FaultPolicy::fail_after`] counter, so a test arms
+    /// `fail_after` against its own workload rather than against the
+    /// hundreds of commands a guest issues while booting.
+    pub fn set_policy(&self, policy: FaultPolicy) {
+        *self.shared.policy.lock().unwrap() = policy;
+        self.shared.io_count.store(0, Ordering::SeqCst);
+    }
+
+    /// The policy currently armed.
+    pub fn policy(&self) -> FaultPolicy {
+        self.shared.policy.lock().unwrap().clone()
+    }
+
+    /// Disarm every fault. The disk works normally again.
+    pub fn clear_policy(&self) {
+        self.set_policy(FaultPolicy::default());
     }
 
     /// Number of `FLUSH` commands served so far.
@@ -493,6 +614,27 @@ fn transmission(stream: &mut UnixStream, shared: &Arc<Shared>) -> io::Result<()>
         let offset = read_u64(stream)?;
         let length = read_u32(stream)?;
 
+        // A `WRITE`'s payload comes off the wire before any verdict,
+        // because the bytes are already in flight. Failing the command
+        // without consuming them would leave the next request to be
+        // parsed out of this one's data — turning one injected fault
+        // into a desynchronised stream and a dead connection, which is
+        // not the fault anybody asked for.
+        let payload = if command == CMD_WRITE {
+            let mut data = vec![0u8; length as usize];
+            stream.read_exact(&mut data)?;
+            Some(data)
+        } else {
+            None
+        };
+
+        if matches!(command, CMD_READ | CMD_WRITE | CMD_FLUSH)
+            && shared.consult(command, offset, length)
+        {
+            send_simple_reply(stream, NBD_EIO, cookie, &[])?;
+            continue;
+        }
+
         match command {
             CMD_READ => {
                 let result = shared.state.lock().unwrap().read(offset, length as usize);
@@ -502,8 +644,8 @@ fn transmission(stream: &mut UnixStream, shared: &Arc<Shared>) -> io::Result<()>
                 }
             }
             CMD_WRITE => {
-                let mut data = vec![0u8; length as usize];
-                stream.read_exact(&mut data)?;
+                // Unwrap: read above for exactly this command.
+                let data = payload.unwrap();
                 let mut state = shared.state.lock().unwrap();
                 let mut result = state.write(offset, &data);
                 // FUA means the guest wants this write durable now, so
@@ -652,6 +794,24 @@ mod tests {
         fn flush(&mut self) {
             self.request(CMD_FLUSH, 0, 0, 0, &[]);
             assert_eq!(self.reply(0).0, 0);
+        }
+
+        // The `try_` forms return the errno instead of asserting
+        // success, for the tests that are about a command failing.
+
+        fn try_read(&mut self, offset: u64, length: u32) -> u32 {
+            self.request(CMD_READ, 0, offset, length, &[]);
+            self.reply(length as usize).0
+        }
+
+        fn try_write(&mut self, offset: u64, data: &[u8]) -> u32 {
+            self.request(CMD_WRITE, 0, offset, data.len() as u32, data);
+            self.reply(0).0
+        }
+
+        fn try_flush(&mut self) -> u32 {
+            self.request(CMD_FLUSH, 0, 0, 0, &[]);
+            self.reply(0).0
         }
     }
 
@@ -805,5 +965,197 @@ mod tests {
 
         let mut second = Client::connect(&disk);
         assert_eq!(second.read(0, SECTOR as u32), vec![0x44; SECTOR]);
+    }
+
+    // --- fault policy ----------------------------------------------
+
+    #[test]
+    fn fail_reads_does_not_touch_writes() {
+        let (dir, path) = image(64 * 1024);
+        let disk = serve(&path, &dir);
+        let mut client = Client::connect(&disk);
+
+        disk.set_policy(FaultPolicy {
+            fail_reads: true,
+            ..Default::default()
+        });
+        assert_eq!(client.try_read(0, SECTOR as u32), NBD_EIO);
+        assert_eq!(
+            client.try_write(0, &[0x11; SECTOR]),
+            0,
+            "reads and writes are separate rules"
+        );
+    }
+
+    #[test]
+    fn a_failed_write_never_reaches_the_disk() {
+        let (dir, path) = image(64 * 1024);
+        let disk = serve(&path, &dir);
+        let mut client = Client::connect(&disk);
+
+        disk.set_policy(FaultPolicy {
+            fail_writes: true,
+            ..Default::default()
+        });
+        assert_eq!(client.try_write(0, &[0xab; SECTOR]), NBD_EIO);
+        assert_eq!(
+            disk.unflushed_sectors(),
+            0,
+            "a write the guest was told failed must not be held"
+        );
+
+        // Nor may the guest read it back. A rejected write that still
+        // showed up later would be a lie in the other direction.
+        disk.clear_policy();
+        assert_eq!(client.read(0, SECTOR as u32), vec![0u8; SECTOR]);
+    }
+
+    #[test]
+    fn a_failed_write_still_consumes_its_payload() {
+        // The subtle one. The payload is already in flight when the
+        // policy decides to fail the command; leaving it on the wire
+        // would make the *next* request parse out of these 512 bytes.
+        let (dir, path) = image(64 * 1024);
+        let disk = serve(&path, &dir);
+        let mut client = Client::connect(&disk);
+
+        disk.set_policy(FaultPolicy {
+            fail_writes: true,
+            ..Default::default()
+        });
+        assert_eq!(client.try_write(0, &[0x77; SECTOR]), NBD_EIO);
+        disk.clear_policy();
+
+        // These succeeding on the same connection is the proof: had the
+        // failed write's bytes been left unread, the stream would be
+        // desynchronised and this would hang or error.
+        client.write(SECTOR as u64, &[0x88; SECTOR]);
+        assert_eq!(client.read(SECTOR as u64, SECTOR as u32), vec![0x88; SECTOR]);
+    }
+
+    #[test]
+    fn fail_after_counts_from_the_moment_it_was_armed() {
+        let (dir, path) = image(64 * 1024);
+        let disk = serve(&path, &dir);
+        let mut client = Client::connect(&disk);
+
+        // Traffic before arming, standing in for a guest's boot. If the
+        // counter ran from the server starting, a test could never aim
+        // `fail_after` at its own workload.
+        for _ in 0..5 {
+            client.read(0, SECTOR as u32);
+        }
+
+        disk.set_policy(FaultPolicy {
+            fail_after: Some(2),
+            ..Default::default()
+        });
+        assert_eq!(client.try_read(0, SECTOR as u32), 0, "the first still works");
+        assert_eq!(client.try_read(0, SECTOR as u32), NBD_EIO, "the second fails");
+        assert_eq!(
+            client.try_read(0, SECTOR as u32),
+            NBD_EIO,
+            "and the disk stays dead"
+        );
+    }
+
+    #[test]
+    fn fail_after_reaches_flush_so_a_guests_fsync_can_fail() {
+        // The one rule that can tell a guest its durable data was lost.
+        let (dir, path) = image(64 * 1024);
+        let disk = serve(&path, &dir);
+        let mut client = Client::connect(&disk);
+
+        disk.set_policy(FaultPolicy {
+            fail_after: Some(1),
+            ..Default::default()
+        });
+        assert_eq!(client.try_flush(), NBD_EIO);
+    }
+
+    #[test]
+    fn fail_writes_leaves_flush_working() {
+        // Deliberately distinct from the test above: `fail_writes`
+        // models a disk refusing writes, not one lying about
+        // durability. A flush under it commits what was already taken.
+        let (dir, path) = image(64 * 1024);
+        let disk = serve(&path, &dir);
+        let mut client = Client::connect(&disk);
+
+        client.write(0, &[0x11; SECTOR]);
+        disk.set_policy(FaultPolicy {
+            fail_writes: true,
+            ..Default::default()
+        });
+        assert_eq!(client.try_flush(), 0);
+
+        let on_disk = std::fs::read(&path).unwrap();
+        assert_eq!(&on_disk[..SECTOR], &[0x11; SECTOR]);
+    }
+
+    #[test]
+    fn fail_range_catches_only_what_overlaps_it() {
+        let (dir, path) = image(64 * 1024);
+        let disk = serve(&path, &dir);
+        let mut client = Client::connect(&disk);
+
+        // Sectors 10 and 11 are the bad ones.
+        disk.set_policy(FaultPolicy {
+            fail_range: Some((10, 2)),
+            ..Default::default()
+        });
+
+        assert_eq!(client.try_read(9 * SECTOR as u64, SECTOR as u32), 0);
+        assert_eq!(client.try_read(10 * SECTOR as u64, SECTOR as u32), NBD_EIO);
+        assert_eq!(client.try_read(11 * SECTOR as u64, SECTOR as u32), NBD_EIO);
+        assert_eq!(client.try_read(12 * SECTOR as u64, SECTOR as u32), 0);
+
+        // A command straddling the edge fails whole: one simple reply
+        // carries one error, so half a read is not expressible.
+        assert_eq!(client.try_read(9 * SECTOR as u64, 2 * SECTOR as u32), NBD_EIO);
+
+        // Writes obey the same range.
+        assert_eq!(client.try_write(10 * SECTOR as u64, &[1; SECTOR]), NBD_EIO);
+        assert_eq!(client.try_write(9 * SECTOR as u64, &[1; SECTOR]), 0);
+    }
+
+    #[test]
+    fn delay_slows_a_command_without_changing_its_outcome() {
+        let (dir, path) = image(64 * 1024);
+        let disk = serve(&path, &dir);
+        let mut client = Client::connect(&disk);
+
+        disk.set_policy(FaultPolicy {
+            delay: Some(Duration::from_millis(120)),
+            ..Default::default()
+        });
+        let start = std::time::Instant::now();
+        let data = client.read(0, SECTOR as u32);
+        let elapsed = start.elapsed();
+
+        // Asserting under the nominal delay, not at it: the point is
+        // that the sleep happened, and a tight equality would flap.
+        assert!(
+            elapsed >= Duration::from_millis(100),
+            "the read should have been delayed, took {elapsed:?}"
+        );
+        assert_eq!(data, vec![0u8; SECTOR], "a delayed command still succeeds");
+    }
+
+    #[test]
+    fn clearing_the_policy_restores_a_working_disk() {
+        let (dir, path) = image(64 * 1024);
+        let disk = serve(&path, &dir);
+        let mut client = Client::connect(&disk);
+
+        disk.set_policy(FaultPolicy {
+            fail_reads: true,
+            ..Default::default()
+        });
+        assert_eq!(client.try_read(0, SECTOR as u32), NBD_EIO);
+
+        disk.clear_policy();
+        assert_eq!(client.try_read(0, SECTOR as u32), 0);
+        assert_eq!(disk.policy(), FaultPolicy::default());
     }
 }

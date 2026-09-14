@@ -1239,6 +1239,27 @@ struct QemuBackend {
     mediated: Vec<(String, crate::nbd::MediatedDisk)>,
 }
 
+impl QemuBackend {
+    /// The NBD server mediating `disk_id`, or an error naming it.
+    ///
+    /// Naming the disk matters: "not mediated" and "no such disk" are
+    /// different mistakes, and an op that silently addressed nothing
+    /// would let a test report durability, or resilience, it never
+    /// demonstrated.
+    fn mediated_disk(&self, disk_id: &str, op: &str) -> Result<&crate::nbd::MediatedDisk, VmmError> {
+        self.mediated
+            .iter()
+            .find(|(id, _)| id == disk_id)
+            .map(|(_, server)| server)
+            .ok_or_else(|| {
+                VmmError::Io(std::io::Error::other(format!(
+                    "disk `{disk_id}` is not mediated — `{op}` needs \
+                     `mediated = true` on the disk when the VM boots"
+                )))
+            })
+    }
+}
+
 impl Backend for QemuBackend {
     fn pause(&self) -> Result<(), VmmError> {
         let qmp = self.qmp.lock().unwrap();
@@ -1391,21 +1412,24 @@ impl Backend for QemuBackend {
     }
 
     fn power_cut_disk(&self, disk_id: &str) -> Result<(), VmmError> {
-        // Naming the disk matters: "not mediated" and "no such disk"
-        // are different mistakes, and a test that silently power-cut
-        // nothing would report durability it never demonstrated.
-        let (_, server) = self
-            .mediated
-            .iter()
-            .find(|(id, _)| id == disk_id)
-            .ok_or_else(|| {
-                VmmError::Io(std::io::Error::other(format!(
-                    "disk `{disk_id}` is not mediated — `power_cut` needs \
-                     `mediated = true` on the disk when the VM boots"
-                )))
-            })?;
-        server.power_cut();
+        self.mediated_disk(disk_id, "power_cut")?.power_cut();
         Ok(())
+    }
+
+    fn set_disk_policy(
+        &self,
+        disk_id: &str,
+        policy: crate::nbd::FaultPolicy,
+    ) -> Result<(), VmmError> {
+        self.mediated_disk(disk_id, "a fault the guest can see")?
+            .set_policy(policy);
+        Ok(())
+    }
+
+    fn disk_policy(&self, disk_id: &str) -> Result<crate::nbd::FaultPolicy, VmmError> {
+        Ok(self
+            .mediated_disk(disk_id, "a fault the guest can see")?
+            .policy())
     }
 
     fn attach_disk(&self, disk_id: &str, image: &Path, readonly: bool) -> Result<(), VmmError> {

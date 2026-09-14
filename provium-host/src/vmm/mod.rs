@@ -332,6 +332,20 @@ impl VmInstance {
         self.backend.power_cut_disk(disk_id)
     }
 
+    /// Arm the guest-visible fault policy on a mediated disk.
+    pub fn set_disk_policy(
+        &self,
+        disk_id: &str,
+        policy: crate::nbd::FaultPolicy,
+    ) -> Result<(), VmmError> {
+        self.backend.set_disk_policy(disk_id, policy)
+    }
+
+    /// Read back the policy armed on a mediated disk.
+    pub fn disk_policy(&self, disk_id: &str) -> Result<crate::nbd::FaultPolicy, VmmError> {
+        self.backend.disk_policy(disk_id)
+    }
+
     /// vsock CID assigned at boot.
     pub fn cid(&self) -> u32 {
         self.cid
@@ -444,6 +458,25 @@ pub(crate) trait Backend: Send + Sync {
     /// happened. Failing loudly is the only safe default.
     fn power_cut_disk(&self, _disk_id: &str) -> Result<(), VmmError> {
         Err(VmmError::Unimplemented("backend power_cut_disk"))
+    }
+
+    /// Arm the fault policy the guest's own I/O is served through.
+    ///
+    /// Errors by default for the same reason as
+    /// [`Self::power_cut_disk`]: a backend that quietly accepted a fault
+    /// it cannot inject would let a test watch a guest sail through an
+    /// error it never actually saw, and report that as resilience.
+    fn set_disk_policy(
+        &self,
+        _disk_id: &str,
+        _policy: crate::nbd::FaultPolicy,
+    ) -> Result<(), VmmError> {
+        Err(VmmError::Unimplemented("backend set_disk_policy"))
+    }
+
+    /// Read back the policy armed on a disk.
+    fn disk_policy(&self, _disk_id: &str) -> Result<crate::nbd::FaultPolicy, VmmError> {
+        Err(VmmError::Unimplemented("backend disk_policy"))
     }
 }
 

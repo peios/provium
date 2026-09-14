@@ -480,7 +480,23 @@ impl ReplHelper {
         raw.insert("clock", vec!["get", "set", "sleep", "advance"]);
         raw.insert(
             "disk",
-            vec!["read_sectors", "write_sectors", "size", "fault_inject", "clear_faults", "detach"],
+            vec![
+                "read_sectors",
+                "write_sectors",
+                "size",
+                "fault_inject",
+                "clear_faults",
+                "detach",
+                // Guest-visible, on a mediated disk.
+                "power_cut",
+                "fail_reads",
+                "fail_writes",
+                "fail_after",
+                "fail_range",
+                "delay",
+                "clear_policy",
+                "fault_policy",
+            ],
         );
         raw.insert("nic", vec!["counters", "capture", "disconnect", "reconnect"]);
         raw.insert("console", vec!["read", "write", "expect", "close"]);
