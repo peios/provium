@@ -81,6 +81,20 @@ pub enum VmError {
         action: &'static str,
     },
 
+    /// A disk image provium was asked to create could not be created.
+    ///
+    /// Distinct from [`VmmError::MissingDisk`], which reports a `path`
+    /// the caller named and provium never creates. This one is about
+    /// the `scratch` and `template` forms, where making the file is
+    /// provium's job and failing to is provium's fault.
+    #[error("disk `{id}`: {message}")]
+    DiskImage {
+        /// The disk's id, as the boot named it.
+        id: String,
+        /// What went wrong, with the operation that failed.
+        message: String,
+    },
+
     /// `vm:boot()` requested more resources than the host pool's
     /// total budget. Cannot be satisfied — fail the test now per
     /// `DESIGN.md` § Failure mode catalogue.
@@ -287,6 +301,35 @@ struct VmInner {
     /// Per-boot overrides set via [`Vm::merge_boot_opts`]. Folded
     /// into the launch opts at boot time.
     boot_overrides: Option<BootOpts>,
+    /// Home for disk images provium created for this VM — the
+    /// `scratch` and `template` forms of `vm:boot({disks = …})`.
+    /// Created on first use and removed when the last handle to this
+    /// VM goes, which is the lifetime those disks are specified to
+    /// have: isolated per VM, and surviving a `reset()` (a warm QMP
+    /// reboot against the same QEMU process and the same backing
+    /// files) so a test can ask what came back.
+    ///
+    /// Deliberately not QEMU's own `vm-<cid>` scratch directory: that
+    /// is torn down on every failed launch and recreated per boot, so
+    /// an image there would not survive the reboot it exists to test.
+    disk_dir: Option<tempfile::TempDir>,
+}
+
+/// What [`Vm::create_disk_image`] should put in a disk image provium
+/// creates and owns.
+#[derive(Clone, Debug)]
+pub enum CreatedDisk {
+    /// A blank image of this many bytes, sparse until written.
+    Blank {
+        /// Image size in bytes.
+        size: u64,
+    },
+    /// A copy of an existing file, so the VM starts from prepared
+    /// contents. The template itself is never written.
+    FromTemplate {
+        /// Host path of the file to copy.
+        from: std::path::PathBuf,
+    },
 }
 
 /// One disk attachment recorded against a VM.
@@ -488,6 +531,7 @@ impl Vm {
                 bridge_attachments: std::collections::BTreeMap::new(),
                 disks: std::collections::BTreeMap::new(),
                 boot_overrides: None,
+                disk_dir: None,
             })),
             resources: Arc::new(Mutex::new(ResourceRegistry::default())),
             pool: None,
@@ -521,6 +565,7 @@ impl Vm {
             disks: std::collections::BTreeMap::new(),
                 boot_overrides: None,
             boot_reservation: None,
+            disk_dir: None,
         };
         Self {
             name,
@@ -682,6 +727,63 @@ impl Vm {
     /// Look up a previously-attached disk by id.
     pub fn disk_attachment(&self, id: &str) -> Option<DiskAttachment> {
         self.inner.lock().unwrap().disks.get(id).cloned()
+    }
+
+    /// Create a disk image this VM owns, and return its path.
+    ///
+    /// `source` decides the contents: a blank image of `size` bytes, or
+    /// a copy of a template file. Either way provium owns the result
+    /// and removes it with the VM, which is what separates these from a
+    /// profile's or a boot's `path` — that names an artefact belonging
+    /// to the caller, is taken verbatim, and is never created here. A
+    /// typo in a `path` must stay an error rather than silently produce
+    /// a blank disk and a baffling boot failure, so the two are
+    /// different keys rather than one forgiving one.
+    ///
+    /// Images are raw and sparse: raw because `disk:read_sectors` reads
+    /// the backing file directly at 512-byte offsets and a container
+    /// format would quietly break that, sparse because a blank 512 MiB
+    /// disk should cost nothing until the guest writes to it.
+    pub fn create_disk_image(
+        &self,
+        id: &str,
+        source: CreatedDisk,
+    ) -> Result<std::path::PathBuf, VmError> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.disk_dir.is_none() {
+            inner.disk_dir = Some(
+                tempfile::Builder::new()
+                    .prefix(&format!("provium-disks-{}-", self.name))
+                    .tempdir()
+                    .map_err(|e| VmError::DiskImage {
+                        id: id.to_owned(),
+                        message: format!("creating the image directory: {e}"),
+                    })?,
+            );
+        }
+        // Unwrap: filled immediately above when absent.
+        let path = inner.disk_dir.as_ref().unwrap().path().join(id);
+        let fail = |e: std::io::Error, what: &str| VmError::DiskImage {
+            id: id.to_owned(),
+            message: format!("{what}: {e}"),
+        };
+        match source {
+            CreatedDisk::Blank { size } => {
+                let file = std::fs::File::create(&path).map_err(|e| fail(e, "creating the image"))?;
+                file.set_len(size)
+                    .map_err(|e| fail(e, "sizing the image"))?;
+            }
+            CreatedDisk::FromTemplate { from } => {
+                // Copied, never opened in place: a template is a
+                // fixture shared by every VM that names it, and a guest
+                // writing through to it would corrupt the next test's
+                // starting state.
+                std::fs::copy(&from, &path).map_err(|e| {
+                    fail(e, &format!("copying the template `{}`", from.display()))
+                })?;
+            }
+        }
+        Ok(path)
     }
 
     // -----------------------------------------------------------------
@@ -1455,6 +1557,39 @@ impl Vm {
             console_socket: running.console_socket,
         });
         Ok(())
+    }
+
+    /// Hot-plug a disk the guest can see, backed by `image`.
+    ///
+    /// Records the attachment either way, so `vm:disk(id)` resolves and
+    /// sector access works even on a backend with no machine to plug
+    /// into. The guest-visible half needs a live VM, so it is attempted
+    /// only from `Booted` or `Paused`; a VM still in `Created` records
+    /// the attachment and nothing else, which is what a disk declared
+    /// before boot is for.
+    pub fn attach_disk_live(
+        &self,
+        attachment: DiskAttachment,
+        readonly: bool,
+    ) -> Result<(), VmError> {
+        let image = attachment.image.clone();
+        self.attach_disk_record(attachment.clone());
+        let Some(image) = image else {
+            return Ok(());
+        };
+        let inner = self.inner.lock().unwrap();
+        if !matches!(inner.state, VmState::Booted | VmState::Paused) {
+            return Ok(());
+        }
+        let Some(instance) = inner.running.as_ref().and_then(|r| r.instance.as_ref()) else {
+            return Ok(());
+        };
+        let r = instance.attach_disk(&attachment.id, &image, readonly);
+        drop(inner);
+        if let Err(e) = &r {
+            self.maybe_mark_dead_on_vmm_err(e);
+        }
+        r.map_err(VmError::Vmm)
     }
 
     /// Hot-unplug a disk via the backend.

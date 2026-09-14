@@ -127,7 +127,7 @@ impl UserData for VmUd {
         methods.add_method("boot", |_, this, opts: Option<mlua::Table>| {
             *this.boot_started.lock().unwrap() = Some(std::time::Instant::now());
             if let Some(t) = opts {
-                let overrides = parse_boot_overrides(&t)?;
+                let overrides = parse_boot_overrides(&t, &this.vm)?;
                 this.vm
                     .merge_boot_opts(overrides)
                     .map_err(mlua::Error::external)?;
@@ -508,11 +508,25 @@ impl UserData for VmUd {
                     .as_ref()
                     .and_then(|t| t.get::<Option<String>>("image").ok().flatten())
                     .map(std::path::PathBuf::from);
-                this.vm.attach_disk_record(crate::vm::DiskAttachment {
-                    id: id.clone(),
-                    size,
-                    image: image.clone(),
-                });
+                let readonly = opts
+                    .as_ref()
+                    .and_then(|t| t.get::<Option<bool>>("readonly").ok().flatten())
+                    .unwrap_or(false);
+                // Records the attachment, and — on a live VM with a
+                // backing image — hot-plugs a device the guest can
+                // actually see. Without an image there is nothing to
+                // plug in, so the record alone is the whole effect,
+                // which is what sector-access-only callers rely on.
+                this.vm
+                    .attach_disk_live(
+                        crate::vm::DiskAttachment {
+                            id: id.clone(),
+                            size,
+                            image: image.clone(),
+                        },
+                        readonly,
+                    )
+                    .map_err(mlua::Error::external)?;
                 Ok(super::disk_ud::DiskUd::with_image_and_vm(
                     id,
                     size,
@@ -1096,7 +1110,29 @@ fn batch_response_to_lua(
 /// Parse a Lua boot-opts table per `DESIGN.md` § VM into a
 /// partial [`crate::vmm::BootOpts`] suitable for
 /// [`crate::vm::Vm::merge_boot_opts`].
-fn parse_boot_overrides(t: &mlua::Table) -> mlua::Result<crate::vmm::BootOpts> {
+/// Parse a byte size: a bare integer, or one with a `K`/`M`/`G`/`T`
+/// suffix. The same grammar the CLI's `--mem` takes, so `"512M"` means
+/// one thing across provium rather than two.
+fn parse_disk_size(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    let (num, multiplier) = match s.chars().last() {
+        Some('K') | Some('k') => (&s[..s.len() - 1], 1024u64),
+        Some('M') | Some('m') => (&s[..s.len() - 1], 1024 * 1024),
+        Some('G') | Some('g') => (&s[..s.len() - 1], 1024 * 1024 * 1024),
+        Some('T') | Some('t') => (&s[..s.len() - 1], 1024u64.pow(4)),
+        _ => (s, 1),
+    };
+    let n: u64 = num
+        .parse()
+        .map_err(|_| format!("cannot parse size `{s}`"))?;
+    n.checked_mul(multiplier)
+        .ok_or_else(|| format!("size `{s}` overflows u64"))
+}
+
+fn parse_boot_overrides(
+    t: &mlua::Table,
+    vm: &crate::vm::Vm,
+) -> mlua::Result<crate::vmm::BootOpts> {
     let mut opts = crate::vmm::BootOpts::default();
     if let Ok(cmdline) = t.get::<String>("kernel_cmdline") {
         opts.cmdline_override = Some(cmdline);
@@ -1162,12 +1198,6 @@ fn parse_boot_overrides(t: &mlua::Table) -> mlua::Result<crate::vmm::BootOpts> {
     if let Ok(disks_tbl) = t.get::<mlua::Table>("disks") {
         for (i, pair) in disks_tbl.sequence_values::<mlua::Table>().enumerate() {
             let entry = pair?;
-            let path: String = entry.get("path")?;
-            if path.is_empty() {
-                return Err(mlua::Error::external(
-                    "boot_opts.disks: `path` must not be empty",
-                ));
-            }
             // Named `boot<N>` rather than `disk<N>` so an unnamed boot
             // disk can never collide with an unnamed profile one.
             let id = match entry.get::<Value>("id")? {
@@ -1178,6 +1208,78 @@ fn parse_boot_overrides(t: &mlua::Table) -> mlua::Result<crate::vmm::BootOpts> {
                         "boot_opts.disks: `id` must be a string, got {}",
                         other.type_name(),
                     )));
+                }
+            };
+            // Three ways to say where the bytes come from, and exactly
+            // one per entry. `path` names an artefact the caller owns:
+            // taken verbatim, never created, and a path that does not
+            // exist stays an error rather than silently becoming a
+            // blank disk. `scratch` and `template` are the opposite —
+            // provium makes the file, owns it, and removes it with the
+            // VM. Keeping them as separate keys rather than making
+            // `path` forgiving is what preserves that.
+            let path_key = entry.get::<Value>("path")?;
+            let scratch_key = entry.get::<Value>("scratch")?;
+            let template_key = entry.get::<Value>("template")?;
+            let named: Vec<&str> = [
+                ("path", &path_key),
+                ("scratch", &scratch_key),
+                ("template", &template_key),
+            ]
+            .iter()
+            .filter(|(_, v)| !matches!(v, Value::Nil))
+            .map(|(k, _)| *k)
+            .collect();
+            if named.len() != 1 {
+                return Err(mlua::Error::external(format!(
+                    "boot_opts.disks: disk `{id}` must name exactly one of \
+                     `path`, `scratch` or `template`, got {}",
+                    if named.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        named.join(" and ")
+                    },
+                )));
+            }
+            let path = match (&path_key, &scratch_key, &template_key) {
+                (Value::String(s), _, _) => {
+                    let p = s.to_str()?.to_owned();
+                    if p.is_empty() {
+                        return Err(mlua::Error::external(
+                            "boot_opts.disks: `path` must not be empty",
+                        ));
+                    }
+                    p
+                }
+                (_, Value::Nil, Value::String(s)) => {
+                    let from = std::path::PathBuf::from(s.to_str()?.to_owned());
+                    vm.create_disk_image(&id, crate::vm::CreatedDisk::FromTemplate { from })
+                        .map_err(mlua::Error::external)?
+                        .to_string_lossy()
+                        .into_owned()
+                }
+                (_, scratch, _) => {
+                    let size = match scratch {
+                        Value::String(s) => {
+                            parse_disk_size(s.to_str()?.as_ref()).map_err(|e| {
+                                mlua::Error::external(format!(
+                                    "boot_opts.disks: disk `{id}`: {e}"
+                                ))
+                            })?
+                        }
+                        Value::Integer(n) if *n > 0 => *n as u64,
+                        other => {
+                            return Err(mlua::Error::external(format!(
+                                "boot_opts.disks: disk `{id}`: `scratch` must be a size \
+                                 such as \"512M\" or a positive byte count, got {}",
+                                other.type_name(),
+                            )));
+                        }
+                    };
+                    vm.create_disk_image(&id, crate::vm::CreatedDisk::Blank { size })
+                        .map_err(mlua::Error::external)?
+                        .to_string_lossy()
+                        .into_owned()
                 }
             };
             let readonly = match entry.get::<Value>("readonly")? {
