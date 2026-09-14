@@ -54,13 +54,9 @@ pub struct ConsoleOpts {
 /// code (`0` on a clean guest power-off or `Ctrl-A X`). With
 /// `print_command` set, prints the assembled command line and returns
 /// `0` without launching anything.
-pub fn run(
-    opts: ConsoleOpts,
-    config: &Config,
-) -> Result<i32, Box<dyn std::error::Error>> {
+pub fn run(opts: ConsoleOpts, config: &Config) -> Result<i32, Box<dyn std::error::Error>> {
     let profile = config.profile(&opts.profile_name).ok_or_else(|| {
-        let available: Vec<&str> =
-            config.profiles.keys().map(String::as_str).collect();
+        let available: Vec<&str> = config.profiles.keys().map(String::as_str).collect();
         let have = if available.is_empty() {
             "none defined".to_string()
         } else {
@@ -110,11 +106,7 @@ pub fn run(
     // comes up too — and allocate a CID so the builder wires vsock.
     let (initrd_path, cmdline, cid) = if opts.inject_agent {
         let scratch_root = std::env::temp_dir().join("provium-qemu");
-        let prepared = crate::vmm::agent_overlay::prepare_initrd(
-            profile,
-            &cmdline,
-            &scratch_root,
-        )?;
+        let prepared = crate::vmm::agent_overlay::prepare_initrd(profile, &cmdline, &scratch_root)?;
         let cid = crate::cid::CidAllocator::for_this_process().allocate();
         (prepared.initrd_path, prepared.cmdline, Some(cid))
     } else {
@@ -183,25 +175,72 @@ pub fn run(
         });
     }
 
-    let status = command.status().map_err(|e| {
-        format!("failed to spawn `{}`: {e}", qemu_binary.display())
-    })?;
+    let status = command
+        .status()
+        .map_err(|e| format!("failed to spawn `{}`: {e}", qemu_binary.display()))?;
     // Signal-terminated (no code) → treat as failure.
     Ok(status.code().unwrap_or(1))
 }
 
 /// Render a [`Command`] as a copy-pasteable shell-ish line for
 /// `--print-command`. Arguments containing whitespace are
-/// single-quoted so the printed line round-trips through a shell.
+/// quoted so the printed line round-trips through a shell. Empty
+/// arguments, quotes and shell metacharacters also require escaping.
 fn render_command(cmd: &Command) -> String {
-    let mut parts = vec![cmd.get_program().to_string_lossy().into_owned()];
-    for a in cmd.get_args() {
-        let s = a.to_string_lossy();
-        if s.contains(char::is_whitespace) {
-            parts.push(format!("'{s}'"));
-        } else {
-            parts.push(s.into_owned());
-        }
+    std::iter::once(cmd.get_program())
+        .chain(cmd.get_args())
+        .map(|arg| {
+            let s = arg.to_string_lossy();
+            if !s.is_empty()
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(&b))
+            {
+                s.into_owned()
+            } else {
+                format!("'{}'", s.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn printed_command_round_trips_shell_metacharacters_and_empty_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let program_dir = dir.path().join("with 'quotes'");
+        std::fs::create_dir(&program_dir).unwrap();
+        let program = program_dir.join("printf");
+        std::os::unix::fs::symlink("/usr/bin/printf", &program).unwrap();
+        let args = [
+            "",
+            "a b",
+            "a'b",
+            "$HOME",
+            "$(printf substituted)",
+            "a;b",
+            "*",
+            "line\nbreak",
+        ];
+        let mut cmd = Command::new(program);
+        cmd.arg("%s\\0").args(args);
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(render_command(&cmd))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected: Vec<u8> = args
+            .iter()
+            .flat_map(|arg| arg.bytes().chain(std::iter::once(0)))
+            .collect();
+        assert_eq!(output.stdout, expected);
     }
-    parts.join(" ")
 }
