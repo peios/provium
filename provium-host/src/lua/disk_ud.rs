@@ -87,6 +87,50 @@ impl DiskUd {
     }
 }
 
+/// Read-modify-write the guest-visible fault policy of a mediated disk.
+///
+/// Each Lua verb sets one field and leaves the others, so rules
+/// accumulate the way `bridge:add_latency` + `bridge:drop_rate` do
+/// rather than each call silently clearing the last.
+fn amend_policy(
+    disk: &DiskUd,
+    op: &str,
+    change: impl FnOnce(&mut crate::nbd::FaultPolicy),
+) -> mlua::Result<()> {
+    let (id, vm) = {
+        let g = disk.inner.lock().unwrap();
+        (g.id.clone(), g.vm.clone())
+    };
+    let Some(vm) = vm else {
+        return Err(mlua::Error::external(format!(
+            "disk:{op}: disk `{id}` has no VM — a fault the guest can see \
+             needs a disk booted with `mediated = true`"
+        )));
+    };
+    let mut policy = vm.disk_policy(&id).map_err(|e| unmediated(op, &id, e))?;
+    change(&mut policy);
+    vm.set_disk_policy(&id, policy)
+        .map_err(|e| unmediated(op, &id, e))
+}
+
+/// The error a guest-visible fault op fails with when there is no
+/// mediated server behind the disk.
+///
+/// Both halves earn their place. The op named is the one the *test*
+/// called: every verb reads the policy before amending it, so the raw
+/// error says `disk_policy` no matter which verb the author wrote, and
+/// a message naming a method nobody called is a bad way to learn what
+/// went wrong. And the underlying error is kept, because "the VM is not
+/// booted" and "the disk is not mediated" are different mistakes and
+/// only one of them is fixed by editing the boot.
+fn unmediated(op: &str, id: &str, cause: impl std::fmt::Display) -> mlua::Error {
+    mlua::Error::external(format!(
+        "disk:{op}: no mediated server for disk `{id}` — a fault the guest \
+         can see needs `mediated = true` on the disk when the VM boots \
+         ({cause})"
+    ))
+}
+
 impl UserData for DiskUd {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("size", |_, this, ()| {
@@ -258,6 +302,88 @@ impl UserData for DiskUd {
             vm.power_cut_disk(&id).map_err(mlua::Error::external)?;
             Ok(())
         });
+
+        // --- faults the guest can see -------------------------------
+        //
+        // `fault_inject` above changes what `read_sectors` and
+        // `write_sectors` do — the *test's* view of the image. These
+        // are served into the guest's own I/O, so they need a disk
+        // booted `mediated = true` and say so on any other rather than
+        // quietly doing the weaker host-side thing.
+        //
+        // Named for what the guest sees rather than reusing
+        // `fault_inject`'s `eio_read` / `eio_write` mode strings: one
+        // name meaning two different layers on one object is the
+        // easiest possible thing for a test author to misread
+        // (PEI-1104).
+        methods.add_method("fail_reads", |_, this, ()| {
+            amend_policy(this, "fail_reads", |p| p.fail_reads = true)
+        });
+        methods.add_method("fail_writes", |_, this, ()| {
+            amend_policy(this, "fail_writes", |p| p.fail_writes = true)
+        });
+        methods.add_method("fail_after", |_, this, n: u64| {
+            if n == 0 {
+                return Err(mlua::Error::external(
+                    "disk:fail_after: n counts commands and must be at least \
+                     1; 0 would mean failing one that never happened",
+                ));
+            }
+            amend_policy(this, "fail_after", |p| p.fail_after = Some(n))
+        });
+        methods.add_method("fail_range", |_, this, (sector, count): (u64, u64)| {
+            if count == 0 {
+                return Err(mlua::Error::external(
+                    "disk:fail_range: count must be at least 1 — an empty \
+                     range overlaps nothing, so the fault would never fire",
+                ));
+            }
+            amend_policy(this, "fail_range", |p| {
+                p.fail_range = Some((sector, count))
+            })
+        });
+        methods.add_method("delay", |_, this, ms: u64| {
+            amend_policy(this, "delay", |p| {
+                p.delay = Some(std::time::Duration::from_millis(ms))
+            })
+        });
+        methods.add_method("clear_policy", |_, this, ()| {
+            amend_policy(this, "clear_policy", |p| {
+                *p = crate::nbd::FaultPolicy::default()
+            })
+        });
+        methods.add_method("fault_policy", |lua, this, ()| {
+            let (id, vm) = {
+                let g = this.inner.lock().unwrap();
+                (g.id.clone(), g.vm.clone())
+            };
+            let Some(vm) = vm else {
+                return Err(mlua::Error::external(format!(
+                    "disk:fault_policy: disk `{id}` has no VM — a fault the \
+                     guest can see needs a disk booted with `mediated = true`"
+                )));
+            };
+            let policy = vm
+                .disk_policy(&id)
+                .map_err(|e| unmediated("fault_policy", &id, e))?;
+            let table = lua.create_table()?;
+            table.set("fail_reads", policy.fail_reads)?;
+            table.set("fail_writes", policy.fail_writes)?;
+            // Absent rather than false/0 when unset, so `if
+            // p.fail_after then` is the natural test in Lua.
+            if let Some(n) = policy.fail_after {
+                table.set("fail_after", n)?;
+            }
+            if let Some((sector, count)) = policy.fail_range {
+                table.set("fail_range_sector", sector)?;
+                table.set("fail_range_count", count)?;
+            }
+            if let Some(delay) = policy.delay {
+                table.set("delay_ms", delay.as_millis() as u64)?;
+            }
+            Ok(Value::Table(table))
+        });
+
         methods.add_method("detach", |_, this, ()| {
             let (id, vm) = {
                 let mut g = this.inner.lock().unwrap();

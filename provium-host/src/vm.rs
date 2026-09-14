@@ -1709,6 +1709,53 @@ impl Vm {
         r.map_err(VmError::Vmm)
     }
 
+    /// Arm the guest-visible fault policy on a mediated disk.
+    ///
+    /// Unlike `disk:fault_inject`, which changes what the *test's*
+    /// sector ops do, this is served into the guest's own I/O path — so
+    /// it needs a disk booted `mediated = true` and errors on any
+    /// other, rather than quietly doing the weaker host-side thing.
+    pub fn set_disk_policy(
+        &self,
+        disk_id: &str,
+        policy: crate::nbd::FaultPolicy,
+    ) -> Result<(), VmError> {
+        let inner = self.inner.lock().unwrap();
+        if !matches!(inner.state, VmState::Booted | VmState::Paused) {
+            return Err(self.wrong_state(inner.state, "set_disk_policy"));
+        }
+        let instance = inner
+            .running
+            .as_ref()
+            .and_then(|r| r.instance.as_ref())
+            .ok_or_else(|| self.wrong_state(inner.state, "set_disk_policy"))?;
+        let r = instance.set_disk_policy(disk_id, policy);
+        drop(inner);
+        if let Err(e) = &r {
+            self.maybe_mark_dead_on_vmm_err(e);
+        }
+        r.map_err(VmError::Vmm)
+    }
+
+    /// Read back the fault policy armed on a mediated disk.
+    pub fn disk_policy(&self, disk_id: &str) -> Result<crate::nbd::FaultPolicy, VmError> {
+        let inner = self.inner.lock().unwrap();
+        if !matches!(inner.state, VmState::Booted | VmState::Paused) {
+            return Err(self.wrong_state(inner.state, "disk_policy"));
+        }
+        let instance = inner
+            .running
+            .as_ref()
+            .and_then(|r| r.instance.as_ref())
+            .ok_or_else(|| self.wrong_state(inner.state, "disk_policy"))?;
+        let r = instance.disk_policy(disk_id);
+        drop(inner);
+        if let Err(e) = &r {
+            self.maybe_mark_dead_on_vmm_err(e);
+        }
+        r.map_err(VmError::Vmm)
+    }
+
     /// Hot-unplug a disk via the backend.
     pub fn detach_disk(&self, disk_id: &str) -> Result<(), VmError> {
         let inner = self.inner.lock().unwrap();
