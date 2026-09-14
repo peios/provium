@@ -201,3 +201,59 @@ fn a_write_qemu_never_flushed_does_not_survive_a_power_cut() {
         "the write QEMU never flushed must not survive the power cut"
     );
 }
+
+#[test]
+fn qemu_system_opens_the_export_as_a_guest_disk() {
+    // qemu-io exercises QEMU's block layer directly. A booted guest
+    // reaches its disk through `-drive` and a virtio-blk device, which
+    // is a different path into the same NBD client — and it is the path
+    // a mediated disk will actually be used through, so it is worth
+    // proving separately.
+    //
+    // `-S` leaves the CPU stopped: there is no guest image here and
+    // none is needed, because QEMU opens its drives while starting up
+    // and exits if one cannot be opened. `cache=none` is the mode a
+    // durability test requires (direct, and crucially *not*
+    // writethrough), so it is the mode worth proving against.
+    let present = Command::new("qemu-system-x86_64")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok();
+    if !present {
+        eprintln!("skipping: qemu-system-x86_64 not installed");
+        return;
+    }
+
+    let (dir, path) = image(64 * 1024);
+    let disk = serve(&path, &dir);
+
+    let log_path = dir.path().join("qemu-system.log");
+    let log = std::fs::File::create(&log_path).unwrap();
+    let mut child = Command::new("qemu-system-x86_64")
+        .args(["-nographic", "-S", "-no-user-config", "-nodefaults"])
+        .args(["-machine", "q35"])
+        .args([
+            "-drive",
+            &format!(
+                "file={},if=none,id=d0,format=raw,cache=none",
+                disk.qemu_url()
+            ),
+        ])
+        .args(["-device", "virtio-blk-pci,drive=d0,id=vd0"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log.try_clone().unwrap()))
+        .stderr(Stdio::from(log))
+        .spawn()
+        .expect("spawning qemu-system-x86_64");
+
+    // A connection is the positive signal. If QEMU rejected the drive
+    // it has already exited, and the wait reports its complaint.
+    wait_until("QEMU to connect to the export", &log_path, || {
+        disk.connections() >= 1
+    });
+
+    child.kill().ok();
+    let _ = child.wait();
+}
