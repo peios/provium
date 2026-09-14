@@ -55,7 +55,8 @@ pub fn run_local_lua(source: &str) -> FileOutcome {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conformance.test.lua");
     std::fs::write(&path, source).unwrap();
-    let vmm: Arc<dyn Vmm> = Arc::new(LocalAgentVmm::new());
+    let vmm: Arc<dyn Vmm> =
+        Arc::new(LocalAgentVmm::new().with_worker_executable(env!("CARGO_BIN_EXE_provium")));
     run_file(&path, default_config(), vmm).unwrap()
 }
 

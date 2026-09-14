@@ -59,6 +59,9 @@ pub struct WorkerConn {
 /// handler thread.
 #[derive(Debug)]
 pub struct AgentState {
+    /// Program to re-exec for workers when embedding the agent in a
+    /// different executable. `None` uses the current executable.
+    worker_executable: Option<std::path::PathBuf>,
     /// Source for fresh handles. Starts at 1 so a `FileHandle::default()`
     /// (== 0) is never confusable with an allocated handle.
     next_handle: AtomicU64,
@@ -105,12 +108,28 @@ impl AgentState {
     /// Build an empty agent state.
     pub fn new() -> Self {
         Self {
+            worker_executable: None,
             next_handle: AtomicU64::new(1),
             files: Mutex::new(HashMap::new()),
             processes: Mutex::new(HashMap::new()),
             workers: Mutex::new(HashMap::new()),
             worker_processes: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Select the executable that serves workers via `--worker-fd`.
+    /// Embedders use this when their own executable cannot serve the
+    /// worker protocol (for example, a Rust test runner).
+    pub fn with_worker_executable(mut self, executable: impl Into<std::path::PathBuf>) -> Self {
+        self.worker_executable = Some(executable.into());
+        self
+    }
+
+    pub(crate) fn worker_executable(&self) -> std::io::Result<std::path::PathBuf> {
+        self.worker_executable
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(std::env::current_exe)
     }
 
     /// Allocate a fresh monotonic handle id. Shared by every table so

@@ -75,7 +75,7 @@ const WORKER_WAIT_POLL: Duration = Duration::from_millis(20);
 /// without ever being inheritable from the parent's other spawns. The
 /// parent keeps the (still-`CLOEXEC`) peer end as the relay socket.
 pub fn spawn(_args: SpawnWorkerArgs, state: &Arc<AgentState>) -> AgentMessage {
-    let exe = match std::env::current_exe() {
+    let exe = match state.worker_executable() {
         Ok(p) => p,
         Err(e) => return spawn_err(format!("worker spawn: current_exe: {e}")),
     };

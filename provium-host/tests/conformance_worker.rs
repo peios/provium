@@ -69,6 +69,9 @@ test("worker:syscall return shape", function(t)
     t:assert(r.result ~= nil, "missing result alias")
     t:assert(r.errno ~= nil, "missing errno")
     t:assert(r.out_bufs ~= nil, "missing out_bufs")
+    t:assert(r.ret > 0)
+    t:assert_eq(r.errno, 0)
+    t:assert(r.ret ~= vm:syscall(39).ret, "worker must have a separate process identity")
 end)
 "#,
     );

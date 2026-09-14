@@ -52,6 +52,9 @@ use provium_host::vmm::Vmm;
     about = "Run *.test.lua against the configured VMM."
 )]
 struct Args {
+    /// Internal entry point for an isolated local-agent worker.
+    #[arg(long, hide = true)]
+    worker_fd: Option<i32>,
     /// Paths to scan for `*.test.lua`. If omitted, the current
     /// directory is scanned.
     #[arg(value_name = "PATH")]
@@ -493,6 +496,17 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<u32, Box<dyn std::error::Error>> {
+    if let Some(fd) = args.worker_fd {
+        use std::os::fd::FromRawFd;
+        // SAFETY: the worker parent passes ownership of this inherited
+        // socket across exec, clearing CLOEXEC in the child only.
+        if fd < 0 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+            return Err("worker control fd is invalid".into());
+        }
+        let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+        provium_agent::connection::serve_worker_child(stream)?;
+        return Ok(0);
+    }
     // Verbose gates the per-VM lifecycle chatter ("agent overlay
     // injected", "agent up after Xs") emitted deep in the VMM
     // layer. Set it once, up front, so every later code path sees

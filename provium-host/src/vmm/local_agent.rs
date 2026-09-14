@@ -22,7 +22,7 @@ use crate::agent_client::AgentClient;
 use crate::cid::CidAllocator;
 use crate::connector::{AgentStream, Connector};
 use crate::profile::Profile;
-use crate::vmm::{Backend, BootOpts, BootSummary, Vmm, VmInstance, VmRunning, VmmError};
+use crate::vmm::{Backend, BootOpts, BootSummary, VmInstance, VmRunning, Vmm, VmmError};
 
 const DEFAULT_LOCAL_MEMORY: u64 = 512 * 1024 * 1024;
 const DEFAULT_LOCAL_CPUS: u32 = 1;
@@ -32,6 +32,7 @@ const DEFAULT_LOCAL_CPUS: u32 = 1;
 #[derive(Debug)]
 pub struct LocalAgentVmm {
     cids: Arc<CidAllocator>,
+    worker_executable: Option<std::path::PathBuf>,
 }
 
 impl LocalAgentVmm {
@@ -39,6 +40,7 @@ impl LocalAgentVmm {
     pub fn new() -> Self {
         Self {
             cids: Arc::new(CidAllocator::for_this_process()),
+            worker_executable: None,
         }
     }
 
@@ -47,7 +49,18 @@ impl LocalAgentVmm {
     /// allocator here so all VMs across the run share a monotonic
     /// namespace.
     pub fn with_cid_allocator(cids: Arc<CidAllocator>) -> Self {
-        Self { cids }
+        Self {
+            cids,
+            worker_executable: None,
+        }
+    }
+
+    /// Choose a `provium-agent` or `provium` executable for isolated
+    /// workers. Set this when embedding the VMM in a program that does
+    /// not handle `--worker-fd`, such as a test runner.
+    pub fn with_worker_executable(mut self, executable: impl Into<std::path::PathBuf>) -> Self {
+        self.worker_executable = Some(executable.into());
+        self
     }
 }
 
@@ -85,7 +98,11 @@ impl Vmm for LocalAgentVmm {
 
         // The agent's state table outlives every per-connection
         // thread — the Connector clones it on each `connect()`.
-        let agent_state = Arc::new(AgentState::new());
+        let mut agent_state = AgentState::new();
+        if let Some(executable) = &self.worker_executable {
+            agent_state = agent_state.with_worker_executable(executable);
+        }
+        let agent_state = Arc::new(agent_state);
 
         let connector = LocalAgentConnector {
             state: Arc::clone(&agent_state),
@@ -167,11 +184,8 @@ impl Connector for LocalAgentConnector {
         thread::Builder::new()
             .name("local-agent".into())
             .spawn(move || {
-                let _ = provium_agent::connection::handle_connection(
-                    &mut reader,
-                    &mut writer,
-                    state,
-                );
+                let _ =
+                    provium_agent::connection::handle_connection(&mut reader, &mut writer, state);
             })?;
         Ok(Box::new(host_side))
     }
