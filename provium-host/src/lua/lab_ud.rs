@@ -341,21 +341,31 @@ impl UserData for LabUd {
         );
 
         // ---------------------------------------------------------------
-        // Bridges — overload like vm:
-        //   lab:bridge("name")          → lookup
+        // Bridges:
+        //   lab:bridge("name")          → lookup, or create when no lab
+        //                                 in scope has it (the documented
+        //                                 form; PEI-1312)
         //   lab:bridge("name", opts?)   → create
         // ---------------------------------------------------------------
         methods.add_method("bridge", |lua, this, args: mlua::Variadic<Value>| {
             match args.len() {
                 1 => {
                     let name = arg_string(&args[0], "name")?;
+                    if let Some(bridge) = this.lookup_bridge(&name) {
+                        return Ok(Value::UserData(
+                            lua.create_userdata(BridgeUd::wrap(bridge))?,
+                        ));
+                    }
                     let bridge = this
-                        .lookup_bridge(&name)
-                        .ok_or_else(|| crate::lab::LabError::UnknownBridge(name.clone()))
+                        .lab
+                        .create_bridge(name)
                         .map_err(mlua::Error::external)?;
-                    Ok(Value::UserData(
-                        lua.create_userdata(BridgeUd::wrap(bridge))?,
-                    ))
+                    let ud = super::result_ud::register_resource(
+                        lua,
+                        BridgeUd::wrap(bridge),
+                        "bridge",
+                    )?;
+                    Ok(Value::UserData(ud))
                 }
                 2 | 3 => {
                     let name = arg_string(&args[0], "name")?;

@@ -547,8 +547,14 @@ impl Bridge {
 
         if need_bridge {
             // Use `ip link add … type bridge`. EEXIST is OK — another
-            // VM may have realized concurrently.
-            let _ = run_ip(&["link", "add", &bridge_name, "type", "bridge"]);
+            // VM may have realized concurrently — but any other failure
+            // is the real one, not the "Cannot find device" the next
+            // step would report instead (PEI-1312).
+            if let Err(e) = run_ip(&["link", "add", &bridge_name, "type", "bridge"]) {
+                if !e.to_string().contains("File exists") {
+                    return Err(e);
+                }
+            }
             run_ip(&["link", "set", "dev", &bridge_name, "up"])?;
         }
         if current_netem != target_netem {
@@ -581,7 +587,14 @@ impl Bridge {
             }
         }
         if need_tap {
-            let _ = run_ip(&["tuntap", "add", "dev", &tap, "mode", "tap"]);
+            // Owned by provium's uid, so QEMU — which runs without
+            // provium's capabilities — may attach to it.
+            let uid = unsafe { libc::getuid() }.to_string();
+            if let Err(e) = run_ip(&["tuntap", "add", "dev", &tap, "mode", "tap", "user", &uid]) {
+                if !e.to_string().contains("File exists") && !e.to_string().contains("busy") {
+                    return Err(e);
+                }
+            }
             run_ip(&["link", "set", "dev", &tap, "master", &bridge_name])?;
             run_ip(&["link", "set", "dev", &tap, "up"])?;
         }
@@ -1248,8 +1261,86 @@ fn default_upstream_iface() -> Option<String> {
     None
 }
 
+/// Raise provium's network capabilities into the ambient set, in a
+/// child between fork and exec. provium holds `CAP_NET_ADMIN` and
+/// `CAP_NET_RAW` as file capabilities; those do not survive an exec of
+/// `ip`, `tc` or `nft`, which carry none of their own, so the child ran
+/// unprivileged and every bridge failed to come up ("Cannot find
+/// device", PEI-1312). A capability rides an exec as ambient only if it
+/// is also inheritable, so it is added there first. Each capability the
+/// process does not hold is left alone: the command then fails with its
+/// own error, as before.
+///
+/// Only `capget`/`capset`/`prctl` run here: async-signal-safe syscalls,
+/// as `pre_exec` requires.
+fn raise_net_caps_ambient() -> std::io::Result<()> {
+    #[repr(C)]
+    struct CapHeader {
+        version: u32,
+        pid: libc::c_int,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CapData {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+    const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+    const CAPS: [u32; 2] = [12 /* CAP_NET_ADMIN */, 13 /* CAP_NET_RAW */];
+
+    let mut header = CapHeader {
+        version: LINUX_CAPABILITY_VERSION_3,
+        pid: 0,
+    };
+    let mut data = [CapData {
+        effective: 0,
+        permitted: 0,
+        inheritable: 0,
+    }; 2];
+    // SAFETY: header and a two-element data array, as version 3 takes.
+    if unsafe { libc::syscall(libc::SYS_capget, &mut header, data.as_mut_ptr()) } != 0 {
+        return Ok(());
+    }
+    let held: Vec<u32> = CAPS
+        .iter()
+        .copied()
+        .filter(|&cap| data[0].permitted & (1 << cap) != 0)
+        .collect();
+    if held.is_empty() {
+        return Ok(());
+    }
+    for &cap in &held {
+        data[0].inheritable |= 1 << cap;
+    }
+    // SAFETY: as above.
+    if unsafe { libc::syscall(libc::SYS_capset, &header, data.as_ptr()) } != 0 {
+        return Ok(());
+    }
+    for &cap in &held {
+        // SAFETY: plain prctl; a refusal only leaves the cap out.
+        unsafe {
+            libc::prctl(
+                libc::PR_CAP_AMBIENT,
+                libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,
+                cap as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            );
+        }
+    }
+    Ok(())
+}
+
 fn run_cmd(program: &str, args: &[&str]) -> std::io::Result<()> {
-    let output = std::process::Command::new(program).args(args).output()?;
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    // SAFETY: the hook makes async-signal-safe syscalls only.
+    unsafe {
+        command.pre_exec(raise_net_caps_ambient);
+    }
+    let output = command.output()?;
     if !output.status.success() {
         return Err(std::io::Error::other(format!(
             "{program} {}: {}",
