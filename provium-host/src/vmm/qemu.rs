@@ -838,11 +838,16 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
                 tap = tap_ifname
             ),
         ]);
-        let mut device =
-            format!("virtio-net-pci,netdev={id}", id = nic.nic_id);
-        if let Some(mac) = &nic.mac {
-            device.push_str(&format!(",mac={mac}"));
-        }
+        // Left to itself QEMU gives every NIC 52:54:00:12:34:56, so two
+        // VMs on one bridge collide and the bridge cannot tell them
+        // apart (PEI-1312). Without an override the MAC is derived from
+        // the NIC id (`<vm>-<bridge>`): stable across boots, distinct
+        // per VM and bridge, in QEMU's locally administered 52:54:00.
+        let mac = nic.mac.clone().unwrap_or_else(|| nic_mac_for(&nic.nic_id));
+        let device = format!(
+            "virtio-net-pci,netdev={id},mac={mac}",
+            id = nic.nic_id
+        );
         cmd.args(["-device", &device]);
     }
     // Disks — one `-drive if=none` + `-device virtio-blk-pci` pair per
@@ -1031,6 +1036,22 @@ fn memory_to_qemu_arg(bytes: u64) -> String {
     let mib = bytes / (1024 * 1024);
     let mib = mib.max(1);
     format!("{mib}M")
+}
+
+/// A NIC's MAC when the test sets none: `52:54:00` (QEMU's locally
+/// administered prefix) and three bytes of the FNV-1a-64 of its id.
+fn nic_mac_for(nic_id: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in nic_id.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!(
+        "52:54:00:{:02x}:{:02x}:{:02x}",
+        (h >> 16) as u8,
+        (h >> 8) as u8,
+        h as u8
+    )
 }
 
 /// Render a path for use as a QEMU CLI argument. Lossy by intent —
