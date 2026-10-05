@@ -209,6 +209,35 @@ impl Bridge {
         let _ = self.refresh_partitions();
     }
 
+    /// Pull a VM's cable: take its TAP off the bridge and keep it.
+    ///
+    /// Unlike [`Bridge::detach`], the TAP survives — QEMU holds it open as
+    /// the NIC's backend, and deleting it would leave the NIC with nothing
+    /// to talk through for the rest of the VM's life — so [`Bridge::replug`]
+    /// can put it back. The VM stays a member. Returns whether a realised
+    /// TAP was unplugged; on an unrealised bridge nothing happens and the
+    /// caller falls back to graph state.
+    pub fn unplug(&self, vm_name: &str) -> std::io::Result<bool> {
+        if !self.inner.lock().unwrap().realized_taps.contains(vm_name) {
+            return Ok(false);
+        }
+        let tap = crate::bridge_realize::tap_name_for_vm_on_bridge(vm_name, &self.name);
+        run_ip(&["link", "set", "dev", &tap, "nomaster"])?;
+        Ok(true)
+    }
+
+    /// Plug a VM's cable back in: its TAP back on the bridge, and up.
+    /// Returns whether a realised TAP was replugged.
+    pub fn replug(&self, vm_name: &str) -> std::io::Result<bool> {
+        if !self.inner.lock().unwrap().realized_taps.contains(vm_name) {
+            return Ok(false);
+        }
+        let tap = crate::bridge_realize::tap_name_for_vm_on_bridge(vm_name, &self.name);
+        run_ip(&["link", "set", "dev", &tap, "master", &self.name])?;
+        run_ip(&["link", "set", "dev", &tap, "up"])?;
+        Ok(true)
+    }
+
     /// Snapshot of the attached-VM set.
     pub fn members(&self) -> Vec<String> {
         self.inner
