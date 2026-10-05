@@ -100,8 +100,18 @@ impl UserData for NicUd {
             super::result_ud::register_resource(lua, stream, "stream")
         });
 
+        // A cable pull: the guest sees its link go down (QMP set_link),
+        // and the host takes the VM's TAP off the bridge but keeps it, so
+        // `reconnect` can plug it back. On a bridge not yet realised
+        // there is no TAP, and the pair falls back to graph state.
         methods.add_method("disconnect", |_, this, ()| {
-            this.bridge.detach(&this.vm_name);
+            let unplugged = this
+                .bridge
+                .unplug(&this.vm_name)
+                .map_err(|e| mlua::Error::external(format!("nic disconnect: {e}")))?;
+            if !unplugged {
+                this.bridge.detach(&this.vm_name);
+            }
             if let Some(vm) = &this.vm {
                 let netdev_id = format!("{}-{}", this.vm_name, this.bridge.name());
                 vm.set_link(&netdev_id, false)
@@ -110,7 +120,13 @@ impl UserData for NicUd {
             Ok(())
         });
         methods.add_method("reconnect", |_, this, ()| {
-            this.bridge.attach(this.vm_name.clone());
+            let replugged = this
+                .bridge
+                .replug(&this.vm_name)
+                .map_err(|e| mlua::Error::external(format!("nic reconnect: {e}")))?;
+            if !replugged {
+                this.bridge.attach(this.vm_name.clone());
+            }
             if let Some(vm) = &this.vm {
                 let netdev_id = format!("{}-{}", this.vm_name, this.bridge.name());
                 vm.set_link(&netdev_id, true)
