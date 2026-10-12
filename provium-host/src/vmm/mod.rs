@@ -306,6 +306,11 @@ impl VmInstance {
         self.backend.wakeup()
     }
 
+    /// Whether the guest is in ACPI S3, without waking it.
+    pub fn is_suspended(&self) -> Result<bool, VmmError> {
+        self.backend.is_suspended()
+    }
+
     /// Toggle a NIC's link state via the backend.
     pub fn set_link(&self, netdev_id: &str, up: bool) -> Result<(), VmmError> {
         self.backend.set_link(netdev_id, up)
@@ -421,6 +426,11 @@ pub(crate) trait Backend: Send + Sync {
     /// own (e.g. by writing `mem` to /sys/power/state).
     fn wakeup(&self) -> Result<(), VmmError> {
         Err(VmmError::Unimplemented("backend wakeup"))
+    }
+
+    /// Query guest suspend state independently of host pause state.
+    fn is_suspended(&self) -> Result<bool, VmmError> {
+        Err(VmmError::Unimplemented("backend is_suspended"))
     }
     /// Toggle a NIC's link state visible to the guest. Default-impl
     /// is a no-op so non-QEMU backends silently ignore.
