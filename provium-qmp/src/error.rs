@@ -42,6 +42,12 @@ pub enum QmpError {
     #[error("QMP operation timed out after {0:?}")]
     Timeout(Duration),
 
+    /// The monitor accepted ACPI powerdown, but the guest did not confirm
+    /// shutdown in time. Unlike a command timeout, this does not imply a
+    /// failed control connection: a guest may ignore the power button.
+    #[error("guest did not shut down within {0:?} after the power button")]
+    GuestShutdownTimeout(Duration),
+
     /// Greeting / capability negotiation failed at connect time.
     #[error("QMP handshake failed: {0}")]
     Handshake(String),

@@ -379,3 +379,132 @@ fn event_field_passes_through_arbitrary_data() {
 // closure types above — but tests don't import it directly).
 #[allow(dead_code)]
 fn _event_use(_: &Event) {}
+
+fn wait_for_powerdown_commands(server: &MockServer, count: usize) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while server
+        .commands_received()
+        .iter()
+        .filter(|name| name.as_str() == "system_powerdown")
+        .count()
+        < count
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "powerdown command was not sent"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn powerdown_waits_for_fresh_guest_shutdown_not_a_stale_event() {
+    let server = MockServer::start();
+    server.respond_to("system_powerdown", json!({}));
+    server.respond_to("query-status", json!({"status": "running"}));
+    let qmp = Qmp::connect(server.path()).unwrap();
+    let stale_mark = qmp.event_mark();
+    server.push_event(
+        "SHUTDOWN",
+        json!({"guest": true, "reason": "guest-shutdown"}),
+        Duration::ZERO,
+    );
+    qmp.wait_event("SHUTDOWN", stale_mark, |_| true, Duration::from_secs(2))
+        .unwrap();
+    assert!(
+        matches!(
+            qmp.powerdown_and_wait(Duration::from_millis(25)),
+            Err(QmpError::GuestShutdownTimeout(_))
+        ),
+        "the earlier event must not satisfy a later request"
+    );
+
+    std::thread::scope(|scope| {
+        let call = scope.spawn(|| qmp.powerdown_and_wait(Duration::from_secs(2)));
+        wait_for_powerdown_commands(&server, 2);
+        assert!(
+            !call.is_finished(),
+            "a stale event cannot confirm this request"
+        );
+        server.push_event(
+            "SHUTDOWN",
+            json!({"guest": true, "reason": "guest-shutdown"}),
+            Duration::ZERO,
+        );
+        call.join().unwrap().unwrap();
+    });
+    qmp.close().unwrap();
+    server.shutdown();
+}
+
+#[test]
+fn powerdown_acknowledgement_alone_times_out_without_closing_or_quitting() {
+    let server = MockServer::start();
+    server.respond_to("system_powerdown", json!({}));
+    server.respond_to("query-status", json!({"status": "running"}));
+    let qmp = Qmp::connect(server.path()).unwrap();
+    let error = qmp
+        .powerdown_and_wait(Duration::from_millis(25))
+        .unwrap_err();
+    assert!(
+        matches!(error, QmpError::GuestShutdownTimeout(_)),
+        "{error:?}"
+    );
+    assert!(!error.is_terminal());
+    assert!(!qmp.is_closed());
+    assert!(!server.commands_received().iter().any(|name| name == "quit"));
+    qmp.execute("query-status", Value::Null).unwrap();
+    qmp.close().unwrap();
+    server.shutdown();
+}
+
+#[test]
+fn powerdown_does_not_accept_host_shutdown_or_guest_reset_as_graceful_poweroff() {
+    for data in [
+        json!({"guest": false, "reason": "host-signal"}),
+        json!({"guest": true, "reason": "guest-reset"}),
+        json!({"guest": true, "reason": "guest-panic"}),
+    ] {
+        let server = MockServer::start();
+        server.respond_to("system_powerdown", json!({}));
+        server.respond_to("query-status", json!({"status": "running"}));
+        let qmp = Qmp::connect(server.path()).unwrap();
+        std::thread::scope(|scope| {
+            let call = scope.spawn(|| qmp.powerdown_and_wait(Duration::from_millis(100)));
+            wait_for_powerdown_commands(&server, 1);
+            server.push_event("SHUTDOWN", data, Duration::ZERO);
+            assert!(matches!(
+                call.join().unwrap(),
+                Err(QmpError::GuestShutdownTimeout(_))
+            ));
+        });
+        qmp.close().unwrap();
+        server.shutdown();
+    }
+}
+
+#[test]
+fn powerdown_surfaces_command_rejection_and_monitor_loss() {
+    let server = MockServer::start();
+    server.respond_to("system_powerdown", json!({}));
+    server.respond_to("query-status", json!({"status": "running"}));
+    server.respond_to_with_error("system_powerdown", "GenericError", "no power button");
+    let qmp = Qmp::connect(server.path()).unwrap();
+    assert!(matches!(
+        qmp.powerdown_and_wait(Duration::from_secs(2)),
+        Err(QmpError::Command { .. })
+    ));
+    qmp.close().unwrap();
+    server.shutdown();
+
+    let server = MockServer::start();
+    server.respond_to("system_powerdown", json!({}));
+    server.respond_to("query-status", json!({"status": "running"}));
+    let qmp = Qmp::connect(server.path()).unwrap();
+    std::thread::scope(|scope| {
+        let call = scope.spawn(|| qmp.powerdown_and_wait(Duration::from_secs(2)));
+        wait_for_powerdown_commands(&server, 1);
+        server.shutdown();
+        assert!(matches!(call.join().unwrap(), Err(QmpError::Closed(_))));
+    });
+}
