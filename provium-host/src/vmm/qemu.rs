@@ -80,6 +80,9 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 /// there.
 const RESET_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// ACPI is a request: bound the guest shutdown wait without forcing it off.
+const POWER_BUTTON_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Maximum time to wait for an inbound migration (`-incoming`) to
 /// finish loading the snapshot before declaring the restore failed.
 /// The migration is dominated by snapshot file I/O — fast on a
@@ -1409,7 +1412,7 @@ impl Backend for QemuBackend {
         let qmp = qmp
             .as_ref()
             .ok_or(VmmError::Unimplemented("VM already shut down"))?;
-        qmp.execute("system_powerdown", serde_json::Value::Null)?;
+        qmp.powerdown_and_wait(POWER_BUTTON_TIMEOUT)?;
         Ok(())
     }
 

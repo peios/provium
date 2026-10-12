@@ -267,10 +267,8 @@ test("vm:power_button() really does shut the guest down", function(t)
     t:assert(gone, "the agent was still answering 60s after the power "
         .. "button; state=" .. tostring(vm:state()))
 
-    -- That it went *gracefully*, rather than simply becoming
-    -- unreachable. The distinction matters and provium's own state
-    -- field cannot currently express it: a clean poweroff and a crash
-    -- both end in `dead`.
+    -- Console evidence independently confirms the guest completed its
+    -- shutdown sequence rather than merely becoming unreachable.
     local log = vm:console():read_log()
     t:assert(log:find("reboot: Power down", 1, true),
         "the kernel never reported powering down, so the guest did not "
@@ -278,15 +276,7 @@ test("vm:power_button() really does shut the guest down", function(t)
 end)
 "#;
 
-/// The documented contract, parked against PEI-1120.
-///
-/// Deliberately **not** weakened to match the code. `power_button`
-/// never touches the state field, and the VM later latches to `dead`
-/// through the agent-connection signal rather than `shutdown` — so a
-/// graceful poweroff is indistinguishable from a crash. When that is
-/// fixed this test should pass exactly as written; until then it is
-/// `#[ignore]`d rather than deleted or softened, so the suite stays
-/// green without the contract being quietly forgotten.
+/// PEI-1120: completion, state, console evidence and reservation release.
 const POWER_BUTTON_STATE_TEST: &str = r#"
 provium:claim({ memory = 1124 * 1024 * 1024, cpus = 1 })
 
@@ -298,6 +288,15 @@ test("vm:power_button() leaves the VM in `shutdown`", function(t)
     vm:power_button()
     -- VM reference, `vm:power_button()`: "Post-call state is `Shutdown`."
     t:assert_eq(vm:state(), "shutdown")
+    t:assert(vm:console():read_log():find("reboot: Power down", 1, true))
+    t:assert(not pcall(function() vm:run("true") end))
+    t:assert_eq(vm:state(), "shutdown", "an agent call must not relabel poweroff as dead")
+    vm:shutdown() -- idempotent after confirmed poweroff
+    -- The first VM released the entire one-VM claim on successful return.
+    local next_vm = provium:vm("next", "{profile}", { memory = "1G", cpus = 1 })
+    next_vm:boot()
+    next_vm:run("true"):assert_ok()
+    next_vm:shutdown()
 end)
 "#;
 
@@ -318,8 +317,6 @@ fn the_power_button_shuts_the_guest_down() {
 }
 
 #[test]
-#[ignore = "known bug PEI-1120: power_button never sets Shutdown, and a graceful \
-            poweroff latches to Dead instead"]
 fn the_power_button_leaves_the_vm_in_shutdown() {
     let Some(outcome) = run_or_skip(POWER_BUTTON_STATE_TEST) else {
         return;
