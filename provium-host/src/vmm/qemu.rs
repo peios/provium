@@ -706,6 +706,10 @@ pub struct QemuLaunchPlan<'a> {
     pub incoming_snapshot: Option<&'a Path>,
 }
 
+/// Snapshot compatibility epoch. Bump when the generated machine layout
+/// changes incompatibly. Epoch 1 adds hot-pluggable ports for launch disks.
+pub(crate) const SNAPSHOT_LAYOUT_VERSION: u32 = 1;
+
 /// Construct the `qemu-system-*` command line for one VM.
 ///
 /// Decisions baked in (per `DESIGN.md` § Performance / Resolved
@@ -859,9 +863,9 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
     // `disk:detach()` has something to name. `format=raw` is stated
     // rather than probed — QEMU warns when it has to guess, and a
     // medium or a filesystem image is raw either way.
-    for disk in plan.disks {
+    for (index, disk) in plan.disks.iter().enumerate() {
         let mut drive = format!(
-            "if=none,id={id},format=raw,file={file}",
+            "if=none,id={id}-node,format=raw,file={file}",
             id = disk.id,
             file = disk.file,
         );
@@ -879,9 +883,18 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
             drive.push_str(",readonly=on");
         }
         cmd.args(["-drive", &drive]);
+        // The Q35 root bus cannot hot-unplug devices. Give each disk a
+        // root port so device_del can request guest-visible removal.
         cmd.args([
             "-device",
-            &format!("virtio-blk-pci,drive={id}", id = disk.id),
+            &format!("pcie-root-port,id={}-port,chassis={}", disk.id, index + 1),
+        ]);
+        cmd.args([
+            "-device",
+            &format!(
+                "virtio-blk-pci,drive={id}-node,id={id},bus={id}-port",
+                id = disk.id,
+            ),
         ]);
     }
     cmd
@@ -1465,11 +1478,8 @@ impl Backend for QemuBackend {
         // The node is named `<id>-node` rather than `<id>`: node names
         // and device ids share one namespace, and the device has to
         // take `<id>` so `detach_disk` — which addresses `device_del`
-        // by id — can find it again. (Disks attached at launch are not
-        // addressable that way: `-device virtio-blk-pci,drive=<id>`
-        // carries no `id=`, so QEMU names the device itself. That is
-        // why `device_del` there is best-effort, and it is left alone
-        // here rather than changed as a side effect of this.)
+        // by id — can find it again. Launch disks use the same naming
+        // convention so both paths are addressable by their public ID.
         let node = format!("{disk_id}-node");
         qmp.execute(
             "blockdev-add",
@@ -1675,14 +1685,16 @@ mod tests {
         assert_eq!(
             args_after_all(&args, "-drive"),
             vec![
-                "if=none,id=medium,format=raw,file=/img/peios.iso,readonly=on".to_owned(),
-                "if=none,id=target,format=raw,file=/img/blank.img".to_owned(),
+                "if=none,id=medium-node,format=raw,file=/img/peios.iso,readonly=on".to_owned(),
+                "if=none,id=target-node,format=raw,file=/img/blank.img".to_owned(),
             ],
             "read-only is opt-in per disk, and order is the order given"
         );
         let devices = args_after_all(&args, "-device");
-        assert!(devices.contains(&"virtio-blk-pci,drive=medium".to_owned()));
-        assert!(devices.contains(&"virtio-blk-pci,drive=target".to_owned()));
+        assert!(devices.contains(&"pcie-root-port,id=medium-port,chassis=1".to_owned()));
+        assert!(devices.contains(&"pcie-root-port,id=target-port,chassis=2".to_owned()));
+        assert!(devices.contains(&"virtio-blk-pci,drive=medium-node,id=medium,bus=medium-port".to_owned()));
+        assert!(devices.contains(&"virtio-blk-pci,drive=target-node,id=target,bus=target-port".to_owned()));
     }
 
     #[test]
@@ -1712,7 +1724,7 @@ mod tests {
         let args = collect_args(&build_qemu_command(&plan));
         assert_eq!(
             arg_after(&args, "-drive").as_deref(),
-            Some("if=none,id=medium,format=raw,file=/build/peios,,2026.9/peios.iso"),
+            Some("if=none,id=medium-node,format=raw,file=/build/peios,,2026.9/peios.iso"),
         );
     }
 
@@ -1755,7 +1767,7 @@ mod tests {
         assert_eq!(
             arg_after(&args, "-drive").as_deref(),
             Some(
-                "if=none,id=state,format=raw,\
+                "if=none,id=state-node,format=raw,\
                  file=nbd+unix:///?socket=/tmp/provium-qemu/vm-7/state.nbd.sock,cache=none"
             ),
         );
@@ -1763,7 +1775,7 @@ mod tests {
         // an ordinary disk.
         assert!(
             args_after_all(&args, "-device")
-                .contains(&"virtio-blk-pci,drive=state".to_owned()),
+                .contains(&"virtio-blk-pci,drive=state-node,id=state,bus=state-port".to_owned()),
             "got {args:?}"
         );
     }
@@ -1790,7 +1802,7 @@ mod tests {
         let args = collect_args(&build_qemu_command(&plan));
         assert_eq!(
             arg_after(&args, "-drive").as_deref(),
-            Some("if=none,id=medium,format=raw,file=/img/peios.iso"),
+            Some("if=none,id=medium-node,format=raw,file=/img/peios.iso"),
         );
     }
 
