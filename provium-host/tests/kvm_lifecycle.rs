@@ -323,3 +323,43 @@ fn the_power_button_leaves_the_vm_in_shutdown() {
     };
     assert_all_passed(&outcome);
 }
+
+// PEI-1103: checking the local detached flag alone misses a failed
+// device_del. Observe the block device disappear inside the real guest.
+const LAUNCH_DISK_DETACH_TEST: &str = r#"
+provium:claim({ memory = 1124 * 1024 * 1024, cpus = 1 })
+local vm = provium:vm("detach", "{profile}", { memory = "1G", cpus = 1 })
+vm:boot({ disks = { { scratch = "17M", id = "detachable" } } })
+vm:console():expect("peinit: phase2 boot complete", 120)
+
+test("detaching a launch disk removes its guest block device", function(t)
+    -- Identify the scratch disk by size, independent of profile disk count.
+    local found = vm:run([[for p in /sys/class/block/vd*; do
+        if [ "$(cat "$p/size")" = 34816 ]; then basename "$p"; fi
+    done]])
+    t:assert_eq(found.exit_code, 0)
+    local name = found.stdout:gsub("%s+$", "")
+    t:assert(name:match("^vd%a+$"), "expected one 17 MiB scratch disk: " .. name)
+    local disk = vm:disk("detachable")
+    disk:detach()
+    t:assert(disk:is_detached())
+    local gone = false
+    for _ = 1, 100 do
+        if vm:run("test ! -e /sys/class/block/" .. name).exit_code == 0 then
+            gone = true
+            break
+        end
+        vm:clock():sleep("100ms")
+    end
+    t:assert(gone, "device_del did not remove launch disk " .. name)
+    t:assert_eq(vm:run("true").exit_code, 0, "guest remains usable after detach")
+end)
+"#;
+
+#[test]
+fn detaching_a_launch_disk_removes_the_guest_device() {
+    let Some(outcome) = run_or_skip(LAUNCH_DISK_DETACH_TEST) else {
+        return;
+    };
+    assert_all_passed(&outcome);
+}
