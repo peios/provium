@@ -29,6 +29,8 @@ use std::time::{Duration, Instant};
 
 use provium_qmp::{EventMark, Qmp};
 
+use super::disk_hotplug::{port_names, DiskPorts};
+
 use crate::agent_client::AgentClient;
 use crate::cid::CidAllocator;
 use crate::connector::VsockConnector;
@@ -609,6 +611,9 @@ impl QemuVmm {
             qmp: Mutex::new(Some(qmp)),
             scratch,
             mediated,
+            disk_ports: Mutex::new(DiskPorts::new(port_names(
+                disks.iter().map(|d| d.id.as_str()),
+            ))),
         });
         let summary = BootSummary {
             guest_os: profile.guest_os.clone(),
@@ -897,6 +902,19 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
             &format!(
                 "virtio-blk-pci,drive={id}-node,id={id},bus={id}-port",
                 id = disk.id,
+            ),
+        ]);
+    }
+    // Q35 cannot hot-add root ports: reserve bounded runtime capacity now.
+    for (index, port) in port_names(plan.disks.iter().map(|d| d.id.as_str()))
+        .iter()
+        .enumerate()
+    {
+        cmd.args([
+            "-device",
+            &format!(
+                "pcie-root-port,id={port},chassis={}",
+                plan.disks.len() + index + 1,
             ),
         ]);
     }
@@ -1274,6 +1292,7 @@ struct QemuBackend {
     /// so they stop when the VM does — a server outliving its guest
     /// would keep a socket alive for a machine that no longer exists.
     mediated: Vec<(String, crate::nbd::MediatedDisk)>,
+    disk_ports: Mutex<DiskPorts>,
 }
 
 impl QemuBackend {
@@ -1474,37 +1493,10 @@ impl Backend for QemuBackend {
         let qmp = qmp
             .as_ref()
             .ok_or(VmmError::Unimplemented("VM already shut down"))?;
-        // Two calls, because a hot-plugged disk is two objects: the
-        // block node that holds the bytes, then the guest-visible
-        // device that points at it.
-        //
-        // The node is named `<id>-node` rather than `<id>`: node names
-        // and device ids share one namespace, and the device has to
-        // take `<id>` so `detach_disk` — which addresses `device_del`
-        // by id — can find it again. Launch disks use the same naming
-        // convention so both paths are addressable by their public ID.
-        let node = format!("{disk_id}-node");
-        qmp.execute(
-            "blockdev-add",
-            serde_json::json!({
-                "driver": "raw",
-                "node-name": node,
-                "read-only": readonly,
-                "file": {
-                    "driver": "file",
-                    "filename": image.to_string_lossy(),
-                },
-            }),
-        )?;
-        qmp.execute(
-            "device_add",
-            serde_json::json!({
-                "driver": "virtio-blk-pci",
-                "drive": node,
-                "id": disk_id,
-            }),
-        )?;
-        Ok(())
+        self.disk_ports.lock().unwrap().attach(
+            disk_id, image, readonly,
+            |name, args| qmp.execute(name, args).map_err(VmmError::from),
+        )
     }
 
     fn detach_disk(&self, disk_id: &str) -> Result<(), VmmError> {

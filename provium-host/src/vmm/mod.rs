@@ -29,6 +29,7 @@ use thiserror::Error;
 use crate::profile::Profile;
 
 pub mod agent_overlay;
+mod disk_hotplug;
 pub mod files_cpio;
 pub mod qemu;
 
