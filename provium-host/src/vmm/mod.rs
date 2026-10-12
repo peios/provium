@@ -296,7 +296,7 @@ impl VmInstance {
         self.backend.end_reset_window()
     }
 
-    /// Press the power button (`system_powerdown`).
+    /// Request poweroff (`system_powerdown`); return after guest shutdown.
     pub fn power_button(&self) -> Result<(), VmmError> {
         self.backend.power_button()
     }
@@ -412,7 +412,7 @@ pub(crate) trait Backend: Send + Sync {
         Ok(())
     }
     /// Default-impl: unsupported. QemuBackend overrides via QMP
-    /// `system_powerdown`.
+    /// `system_powerdown` followed by confirmed guest shutdown.
     fn power_button(&self) -> Result<(), VmmError> {
         Err(VmmError::Unimplemented("backend power_button"))
     }

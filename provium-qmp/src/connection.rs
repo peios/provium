@@ -398,6 +398,28 @@ impl Qmp {
         self.execute("quit", Value::Null).map(|_| ())
     }
 
+    /// Request ACPI powerdown and wait for a new guest-initiated shutdown.
+    /// An acknowledgement of the command alone is not completion. A timeout
+    /// waiting for the guest does not force poweroff or close the monitor.
+    pub fn powerdown_and_wait(&self, timeout: Duration) -> Result<(), QmpError> {
+        let mark = self.event_mark();
+        self.execute("system_powerdown", Value::Null)?;
+        self.wait_event(
+            "SHUTDOWN",
+            mark,
+            |event| {
+                event.data.get("guest").and_then(Value::as_bool) == Some(true)
+                    && event.data.get("reason").and_then(Value::as_str) == Some("guest-shutdown")
+            },
+            timeout,
+        )
+        .map(|_| ())
+        .map_err(|error| match error {
+            QmpError::Timeout(duration) => QmpError::GuestShutdownTimeout(duration),
+            other => other,
+        })
+    }
+
     /// Save VM state to `path` using QEMU's `migrate file:<path>` form.
     ///
     /// Returns as soon as QEMU accepts the command; **does not** wait
