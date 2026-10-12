@@ -368,6 +368,9 @@ impl UserData for VmUd {
             this.vm.power_button().map_err(mlua::Error::external)?;
             Ok(())
         });
+        methods.add_method("is_suspended", |_, this, ()| {
+            this.vm.is_suspended().map_err(mlua::Error::external)
+        });
         methods.add_method("wakeup", |_, this, ()| {
             this.vm.wakeup().map_err(mlua::Error::external)?;
             Ok(())

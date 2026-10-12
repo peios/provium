@@ -9,6 +9,43 @@ mod common;
 use common::{assert_one_passed, run_local_lua};
 
 #[test]
+fn suspend_query_requires_booted_state() {
+    let outcome = run_local_lua(
+        r#"
+test("suspend query checks lifecycle state", function(t)
+    local vm = provium:vm("suspend-query", "peios")
+    local function rejected(state)
+        local ok, err = pcall(vm.is_suspended, vm)
+        t:assert(not ok)
+        t:assert(tostring(err):find(state), "state error: " .. tostring(err))
+    end
+    rejected("not booted")
+    vm:boot()
+    vm:shutdown()
+    rejected("shutdown")
+end)
+"#,
+    );
+    assert_one_passed(&outcome);
+}
+
+#[test]
+fn suspend_query_does_not_invent_state_for_local_agent() {
+    let outcome = run_local_lua(
+        r#"
+test("a backend without ACPI reports unsupported", function(t)
+    local vm = provium:vm("suspend-query", "peios"):boot()
+    local ok, err = pcall(vm.is_suspended, vm)
+    t:assert(not ok)
+    t:assert(tostring(err):find("backend is_suspended"), tostring(err))
+    t:assert_eq(vm:state(), "booted", "unsupported is not a dead VM")
+end)
+"#,
+    );
+    assert_one_passed(&outcome);
+}
+
+#[test]
 fn reset_from_created_state_errors() {
     let outcome = run_local_lua(
         r#"

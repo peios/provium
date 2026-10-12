@@ -1438,6 +1438,14 @@ impl Backend for QemuBackend {
         Ok(())
     }
 
+    fn is_suspended(&self) -> Result<bool, VmmError> {
+        let qmp = self.qmp.lock().unwrap();
+        let qmp = qmp
+            .as_ref()
+            .ok_or(VmmError::Unimplemented("VM already shut down"))?;
+        Ok(qmp.query_status()? == "suspended")
+    }
+
     fn set_link(&self, netdev_id: &str, up: bool) -> Result<(), VmmError> {
         let qmp = self.qmp.lock().unwrap();
         let qmp = qmp
