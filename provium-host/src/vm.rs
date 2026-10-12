@@ -1383,10 +1383,12 @@ impl Vm {
         r.map_err(VmError::Vmm)
     }
 
-    /// Press the virtual power button (graceful shutdown signal
-    /// to the guest, e.g. ACPI).
+    /// Request graceful poweroff and return once the backend confirms it.
+    /// A guest that ignores the request times out without forced shutdown.
     pub fn power_button(&self) -> Result<(), VmError> {
-        let inner = self.inner.lock().unwrap();
+        // Keep state transitions and agent probes out until confirmation:
+        // the agent normally disappears before QEMU finishes the poweroff.
+        let mut inner = self.inner.lock().unwrap();
         if inner.state != VmState::Booted {
             return Err(self.wrong_state(inner.state, "power_button"));
         }
@@ -1395,12 +1397,17 @@ impl Vm {
             .instance
             .as_ref()
             .ok_or_else(|| self.wrong_state(inner.state, "power_button"))?;
-        let r = inst.power_button();
-        drop(inner);
-        if let Err(e) = &r {
-            self.maybe_mark_dead_on_vmm_err(e);
+        if let Err(error) = inst.power_button() {
+            if is_qmp_dead_signal(&error) {
+                inner.state = VmState::Dead;
+            }
+            return Err(VmError::Vmm(error));
         }
-        r.map_err(VmError::Vmm)
+        inner.state = VmState::Shutdown;
+        inner.boot_reservation = None;
+        // Retain the instance until its normal drop so console evidence
+        // remains readable after poweroff (backend cleanup removes scratch).
+        Ok(())
     }
 
     /// Spawn a sub-agent worker.
@@ -2946,5 +2953,24 @@ mod boot_override_tests {
         let over = inner.boot_overrides.as_ref().expect("overrides recorded");
         assert_eq!(over.agent_timeout, Some(twelve));
         assert_eq!(over.rng_seed, Some(7));
+    }
+}
+
+#[cfg(test)]
+mod power_button_tests {
+    use super::*;
+
+    #[test]
+    fn an_ignored_power_button_is_not_a_dead_monitor() {
+        let timeout = Duration::from_secs(60);
+        assert!(!is_qmp_dead_signal(&VmmError::Qmp(
+            provium_qmp::QmpError::GuestShutdownTimeout(timeout)
+        )));
+        assert!(is_qmp_dead_signal(&VmmError::Qmp(
+            provium_qmp::QmpError::Timeout(timeout)
+        )));
+        assert!(is_qmp_dead_signal(&VmmError::Qmp(
+            provium_qmp::QmpError::Closed("monitor exited")
+        )));
     }
 }
