@@ -125,8 +125,9 @@ pub fn canonical_profile_paths_all(
 
 /// Compute the cache key for a fixture file.
 ///
-/// The key includes the [`provium_protocol::PROTOCOL_VERSION`] so
-/// rebuilds happen automatically when the wire shape changes —
+/// The key includes [`provium_protocol::PROTOCOL_VERSION`]
+/// and the QEMU snapshot layout epoch, so rebuilds happen automatically when
+/// the wire shape or generated device topology changes —
 /// matching the design's "stale snapshot is a cache miss" guarantee.
 pub fn compute_key(fixture_source: &[u8]) -> CacheKey {
     compute_key_with_deps(fixture_source, &[])
@@ -210,6 +211,9 @@ pub fn compute_key_with_deps_kernels_and_externals(
     hasher.update(fixture_source);
     hasher.update(b"|protocol=");
     hasher.update(provium_protocol::PROTOCOL_VERSION.to_le_bytes());
+    // A different device topology cannot consume an old QEMU snapshot.
+    hasher.update(b"|qemu-layout=");
+    hasher.update(crate::vmm::qemu::SNAPSHOT_LAYOUT_VERSION.to_le_bytes());
     for dep in dep_keys {
         hasher.update(b"|dep=");
         hasher.update(dep.as_str().as_bytes());
@@ -823,6 +827,16 @@ mod tests {
         let k2 = compute_key(b"some lua source");
         assert_eq!(k1, k2);
         assert_eq!(k1.0.len(), 64);
+    }
+
+    #[test]
+    fn pre_root_port_snapshot_keys_are_invalidated() {
+        let source = b"some lua source";
+        let mut old = Sha256::new();
+        old.update(source);
+        old.update(b"|protocol=");
+        old.update(provium_protocol::PROTOCOL_VERSION.to_le_bytes());
+        assert_ne!(compute_key(source).0, format!("{:x}", old.finalize()));
     }
 
     #[test]
