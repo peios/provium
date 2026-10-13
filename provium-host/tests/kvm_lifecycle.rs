@@ -155,7 +155,18 @@ fn run_or_skip(source: &str) -> Option<FileOutcome> {
     // The profile name is the one thing the Lua cannot hard-code, since
     // it is selectable. Substituted rather than parameterised so the
     // body stays readable as the Lua a user would actually write.
-    std::fs::write(&path, source.replace("{profile}", &profile)).unwrap();
+    let disk_image = dir.path().join("hotplug.raw");
+    if source.contains("{disk_image}") {
+        std::fs::File::create(&disk_image)
+            .unwrap()
+            .set_len(17 * 1024 * 1024)
+            .unwrap();
+    }
+    std::fs::write(
+        &path,
+        source.replace("{profile}", &profile)
+            .replace("{disk_image}", &disk_image.to_string_lossy()),
+    ).unwrap();
 
     let vmm: Arc<dyn Vmm> = Arc::new(QemuVmm::new());
     Some(run_file(&path, config, vmm).expect("running the test file"))
@@ -359,6 +370,107 @@ end)
 #[test]
 fn detaching_a_launch_disk_removes_the_guest_device() {
     let Some(outcome) = run_or_skip(LAUNCH_DISK_DETACH_TEST) else {
+        return;
+    };
+    assert_all_passed(&outcome);
+}
+
+// PEI-1430: the QMP success and the guest's device inventory must agree.
+const HOT_DISK_TEST: &str = r#"
+provium:claim({ memory = 1124 * 1024 * 1024, cpus = 1 })
+local vm = provium:vm("hotdisk", "{profile}", { memory = "1G", cpus = 1 })
+vm:boot()
+vm:console():expect("peinit: phase2 boot complete", 120)
+
+test("a runtime disk appears in the guest and disappears after detach", function(t)
+    local disk = vm:attach_disk({id="hotdisk", size=17 * 1024 * 1024, image="{disk_image}"})
+    local name = ""
+    for _ = 1, 100 do
+        local found = vm:run([[for p in /sys/class/block/vd*; do
+            if [ "$(cat "$p/size")" = 34816 ]; then basename "$p"; fi
+        done]])
+        t:assert_eq(found.exit_code, 0)
+        name = found.stdout:gsub("%s+$", "")
+        if name:match("^vd%a+$") then break end
+        vm:clock():sleep("100ms")
+    end
+    t:assert(name:match("^vd%a+$"), "runtime disk did not appear in guest: " .. name)
+    disk:detach()
+    local gone = false
+    for _ = 1, 100 do
+        if vm:run("test ! -e /sys/class/block/" .. name).exit_code == 0 then
+            gone = true
+            break
+        end
+        vm:clock():sleep("100ms")
+    end
+    t:assert(gone, "runtime disk remained after detach")
+    t:assert_eq(vm:run("true").exit_code, 0)
+end)
+"#;
+
+#[test]
+fn runtime_disk_appears_and_disappears_in_the_guest() {
+    let Some(outcome) = run_or_skip(HOT_DISK_TEST) else {
+        return;
+    };
+    assert_all_passed(&outcome);
+}
+
+const HOT_DISK_CAPACITY_TEST: &str = r#"
+provium:claim({ memory = 1124 * 1024 * 1024, cpus = 1 })
+local vm = provium:vm("capacity", "{profile}", { memory = "1G", cpus = 1 })
+vm:boot()
+vm:console():expect("peinit: phase2 boot complete", 120)
+
+local function count_disks()
+    local r = vm:run([[n=0; for p in /sys/class/block/vd*; do
+        if [ "$(cat "$p/size")" = 34816 ]; then n=$((n+1)); fi
+    done; echo "$n"]])
+    assert(r.exit_code == 0, r.stderr)
+    return tonumber(r.stdout)
+end
+local function wait_count(t, want)
+    for _ = 1, 100 do
+        if count_disks() == want then return end
+        vm:clock():sleep("100ms")
+    end
+    t:assert_eq(count_disks(), want, "unexpected runtime disk inventory")
+end
+local function attach(id)
+    return vm:attach_disk({id=id, size=17 * 1024 * 1024, image="{disk_image}", readonly=true})
+end
+
+test("runtime disk capacity is bounded and an unplugged port can be reused", function(t)
+    local disks = {}
+    for i = 1, 8 do disks[i] = attach("hot" .. i) end
+    wait_count(t, 8)
+    local ok, err = pcall(function() attach("overflow") end)
+    t:assert(not ok and tostring(err):find("capacity 8", 1, true), tostring(err))
+    -- The guest cannot complete removal while paused. Requesting detach
+    -- must not let a ninth device borrow an occupied port.
+    vm:pause()
+    disks[1]:detach()
+    ok, err = pcall(function() attach("overflow") end)
+    t:assert(not ok and tostring(err):find("capacity 8", 1, true), tostring(err))
+    vm:resume()
+    wait_count(t, 7)
+    for _ = 1, 100 do
+        ok, err = pcall(function() return attach("overflow") end)
+        if ok then break end
+        t:assert(tostring(err):find("capacity 8", 1, true), tostring(err))
+        vm:clock():sleep("100ms")
+    end
+    t:assert(ok, tostring(err))
+    wait_count(t, 8)
+    t:assert_eq(vm:state(), "booted", "capacity error must not mark the VM dead")
+    t:assert_eq(vm:run("true").exit_code, 0)
+end)
+"#;
+
+#[test]
+fn runtime_disk_ports_wait_for_guest_removal_and_are_reusable() {
+    let Some(outcome) = run_or_skip(HOT_DISK_CAPACITY_TEST) else {
         return;
     };
     assert_all_passed(&outcome);
