@@ -1383,6 +1383,26 @@ impl Vm {
         r.map_err(VmError::Vmm)
     }
 
+    /// Query ACPI S3 without waking the guest. Booted-only; unlike pause,
+    /// guest suspend does not change the host lifecycle state.
+    pub fn is_suspended(&self) -> Result<bool, VmError> {
+        let inner = self.inner.lock().unwrap();
+        if inner.state != VmState::Booted {
+            return Err(self.wrong_state(inner.state, "is_suspended"));
+        }
+        let res = inner.running.as_ref().ok_or_else(|| self.wrong_state(inner.state, "is_suspended"))?;
+        let inst = res
+            .instance
+            .as_ref()
+            .ok_or_else(|| self.wrong_state(inner.state, "is_suspended"))?;
+        let r = inst.is_suspended();
+        drop(inner);
+        if let Err(e) = &r {
+            self.maybe_mark_dead_on_vmm_err(e);
+        }
+        r.map_err(VmError::Vmm)
+    }
+
     /// Request graceful poweroff and return once the backend confirms it.
     /// A guest that ignores the request times out without forced shutdown.
     pub fn power_button(&self) -> Result<(), VmError> {

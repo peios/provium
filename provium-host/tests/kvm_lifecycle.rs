@@ -185,6 +185,25 @@ fn assert_all_passed(outcome: &FileOutcome) {
     }
 }
 
+#[test]
+fn suspend_query_distinguishes_running_from_host_pause() {
+    let Some(outcome) = run_or_skip(r#"
+test("query suspend state without changing lifecycle", function(t)
+    local vm = provium:vm("query-suspend", "{profile}"):boot()
+    t:assert_eq(vm:is_suspended(), false)
+    vm:pause()
+    local ok, err = pcall(vm.is_suspended, vm)
+    t:assert(not ok and tostring(err):find("paused"), tostring(err))
+    vm:resume()
+    t:assert_eq(vm:is_suspended(), false)
+    vm:shutdown()
+    local closed, why = pcall(vm.is_suspended, vm)
+    t:assert(not closed and tostring(why):find("shutdown"), tostring(why))
+end)
+"#) else { return; };
+    assert_all_passed(&outcome);
+}
+
 /// `vm:reset()` now returns only once the guest is serving its agent
 /// again, so the test is simply: reset, then use the VM. No polling.
 ///
