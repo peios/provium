@@ -17,7 +17,8 @@ fn config() -> Arc<Config> {
         "peios".into(),
         Profile {
             kernel: "/unused".into(),
-            initrd: "/unused".into(), root: None,
+            initrd: "/unused".into(),
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -26,7 +27,8 @@ fn config() -> Arc<Config> {
             disks: Vec::new(),
             cmdline_file: None,
             build: None,
-            build_out: None, dir: None,
+            build_out: None,
+            dir: None,
         },
     );
     Arc::new(Config {
@@ -45,23 +47,24 @@ fn run(source: &str) -> provium_host::lua::FileOutcome {
 
 #[test]
 fn create_then_lookup_returns_same_bridge() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("bridge crud", function(t)
     local lan = provium:bridge("lan", {})
     local same = provium:bridge("lan")
     t:assert_eq(lan:name(), same:name())
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 #[test]
 fn attach_then_members_lists_all_attached_vms() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("attach", function(t)
     local lan = provium:bridge("lan", {})
     local v1 = provium:vm("dc1", "peios")
@@ -74,16 +77,18 @@ test("attach", function(t)
     t:assert_eq(members[1], "dc1")
     t:assert_eq(members[2], "dc2")
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 #[test]
 fn partition_is_symmetric_and_unparts_clean() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("partition", function(t)
     local lan = provium:bridge("lan", {})
     lan:partition("a", "b")
@@ -92,15 +97,13 @@ test("partition", function(t)
     lan:unpartition("a", "b")
     t:assert(not lan:is_partitioned("a", "b"))
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn partition_all_then_restore() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("partition all", function(t)
     local lan = provium:bridge("lan", {})
     lan:partition_all()
@@ -108,15 +111,13 @@ test("partition all", function(t)
     lan:restore_all()
     t:assert(not lan:is_partitioned("anything", "anywhere"))
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn impairments_round_trip_through_lua() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("impairments", function(t)
     local lan = provium:bridge("lan", {})
     lan:add_latency(50)
@@ -127,22 +128,19 @@ test("impairments", function(t)
     t:assert_eq(lan:latency_ms(), 0)
     t:assert_eq(lan:drop_rate_pct(), 0)
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn duplicate_bridge_name_errors() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("dup", function(t)
     provium:bridge("lan", {})
     local ok, err = pcall(function() provium:bridge("lan", {}) end)
     t:assert(not ok)
     t:assert_contains(tostring(err), "already used")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }

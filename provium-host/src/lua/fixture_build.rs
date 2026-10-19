@@ -112,9 +112,10 @@ pub fn build_fixture(
     // fixture's directory. See the parallel comment in runner.rs.
     let abs_path =
         std::fs::canonicalize(fixture_path).unwrap_or_else(|_| fixture_path.to_path_buf());
-    let _ = lua
-        .globals()
-        .set("_PROVIUM_SOURCE_PATH", abs_path.to_string_lossy().into_owned());
+    let _ = lua.globals().set(
+        "_PROVIUM_SOURCE_PATH",
+        abs_path.to_string_lossy().into_owned(),
+    );
 
     // Both the Lua eval and the outcome conversion can panic
     // (mlua catches Rust panics inside callbacks but not panics
@@ -184,9 +185,7 @@ fn outcome_from_value(value: &Value) -> Result<FixtureBuildOutcome, String> {
             snapshot_path: snap.path.clone(),
         });
     }
-    if let Ok(snap) =
-        ud.borrow::<crate::lua::lab_snapshot_ud::LabSnapshotUd>()
-    {
+    if let Ok(snap) = ud.borrow::<crate::lua::lab_snapshot_ud::LabSnapshotUd>() {
         if !snap.dir.is_dir() {
             return Err(format!(
                 "lab snapshot dir not found at {}",

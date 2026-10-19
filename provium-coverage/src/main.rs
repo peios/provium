@@ -4,7 +4,7 @@
 //! `test_passed` / `test_failed` / `test_skipped` by a metadata key
 //! (default `spec`), and emits a coverage report.
 //!
-//! Slice 12 surface (kept deliberately minimal):
+//! Supported event summaries:
 //!
 //! ```text
 //! provium-coverage [--from PATH] [--by KEY] [--json]
@@ -26,7 +26,7 @@
 //! row covered only by a tracked-but-not-yet-runnable test is visible as
 //! covered-but-skipped rather than silently absent.
 //!
-//! Out of scope per `DESIGN.md` § Spec citation grouping: hierarchical
+//! Unsupported grouping modes: hierarchical
 //! rollups (`§4.2.1.1` ⇒ `§4.2.1`). Exact-string matching is what ships.
 
 use std::collections::BTreeMap;
@@ -134,7 +134,10 @@ impl CoverageReport {
             out.push_str(&format!("  {k}: {}\n", render_counts(s)));
         }
         if self.uncategorised.total() > 0 {
-            out.push_str(&format!("  <unset>: {}\n", render_counts(&self.uncategorised)));
+            out.push_str(&format!(
+                "  <unset>: {}\n",
+                render_counts(&self.uncategorised)
+            ));
         }
         let (passed, failed, skipped) = self.totals();
         out.push_str(&format!(
@@ -215,7 +218,7 @@ fn json_string(s: &str) -> String {
 
 /// Drain `reader` of msgpack-framed events and aggregate by `key`.
 ///
-/// Public for slice-12 tests; binaries use [`run`].
+/// Shared summary implementation; binaries use [`run`].
 pub fn aggregate<R: Read>(
     reader: &mut R,
     key: &str,
@@ -409,7 +412,11 @@ mod tests {
         let mut report = CoverageReport::default();
         report.buckets.insert(
             "§4.2".into(),
-            BucketStats { passed: 3, failed: 1, skipped: 2 },
+            BucketStats {
+                passed: 3,
+                failed: 1,
+                skipped: 2,
+            },
         );
         let s = report.to_json();
         assert!(s.contains("§4.2"));
@@ -423,11 +430,19 @@ mod tests {
         let mut report = CoverageReport::default();
         report.buckets.insert(
             "PSD-A §1".into(),
-            BucketStats { passed: 5, failed: 0, skipped: 1 },
+            BucketStats {
+                passed: 5,
+                failed: 0,
+                skipped: 1,
+            },
         );
         report.buckets.insert(
             "PSD-B §2".into(),
-            BucketStats { passed: 0, failed: 2, skipped: 0 },
+            BucketStats {
+                passed: 0,
+                failed: 2,
+                skipped: 0,
+            },
         );
         let s = report.render_plain("spec");
         assert!(s.contains("PSD-A §1"));

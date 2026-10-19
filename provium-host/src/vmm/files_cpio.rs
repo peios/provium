@@ -162,9 +162,7 @@ fn push_entry(out: &mut Vec<u8>, ino: u32, mode: u32, name: &str, data: &[u8]) {
     let namesize = name.len() as u32 + 1; // NUL included
     let filesize = data.len() as u32;
     out.extend_from_slice(b"070701");
-    for field in [
-        ino, mode, 0, 0, 1, 0, filesize, 0, 0, 0, 0, namesize, 0,
-    ] {
+    for field in [ino, mode, 0, 0, 1, 0, filesize, 0, 0, 0, 0, namesize, 0] {
         out.extend_from_slice(format!("{field:08x}").as_bytes());
     }
     out.extend_from_slice(name.as_bytes());
@@ -207,8 +205,7 @@ mod tests {
             let filesize = hex(6) as usize;
             let namesize = hex(11) as usize;
             let name_start = pos + 110;
-            let name =
-                std::str::from_utf8(&bytes[name_start..name_start + namesize - 1]).unwrap();
+            let name = std::str::from_utf8(&bytes[name_start..name_start + namesize - 1]).unwrap();
             let mut data_start = name_start + namesize;
             data_start += (4 - data_start % 4) % 4;
             let data = bytes[data_start..data_start + filesize].to_vec();
@@ -266,7 +263,11 @@ mod tests {
     #[test]
     fn the_segment_is_a_gzip_container_the_kernel_will_recognise() {
         let seg = build_segment(&[file("/a", "hello", 0o644)]);
-        assert_eq!(&seg[..3], &[0x1f, 0x8b, 0x08], "gzip magic and deflate method");
+        assert_eq!(
+            &seg[..3],
+            &[0x1f, 0x8b, 0x08],
+            "gzip magic and deflate method"
+        );
         // Round-trip through the system gunzip: stored blocks, correct
         // CRC and length, or this fails.
         let raw = build(&[file("/a", "hello", 0o644)]);
@@ -282,7 +283,11 @@ mod tests {
             child.stdin.take().unwrap().write_all(&seg).unwrap();
         }
         let out = child.wait_with_output().unwrap();
-        assert!(out.status.success(), "gunzip: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "gunzip: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert_eq!(out.stdout, raw, "the container holds the archive unchanged");
     }
 

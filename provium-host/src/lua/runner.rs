@@ -117,11 +117,7 @@ pub fn run_file(
     config: Arc<Config>,
     vmm: Arc<dyn Vmm>,
 ) -> mlua::Result<FileOutcome> {
-    let root_lab = Lab::new(
-        "provium",
-        Arc::clone(&config),
-        Arc::clone(&vmm),
-    );
+    let root_lab = Lab::new("provium", Arc::clone(&config), Arc::clone(&vmm));
     run_file_with_lab_and_sink(path, config, vmm, root_lab, Arc::new(NullSink))
 }
 
@@ -203,9 +199,10 @@ pub fn run_file_full(
     // require()d helpers load via loadfile and DO get `@`-prefixed
     // sources, so push_file's debug-walk still picks them up.
     let abs_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-    let _ = lua
-        .globals()
-        .set("_PROVIUM_SOURCE_PATH", abs_path.to_string_lossy().into_owned());
+    let _ = lua.globals().set(
+        "_PROVIUM_SOURCE_PATH",
+        abs_path.to_string_lossy().into_owned(),
+    );
     if let Err(e) = lua.load(&chunk_source).set_name(&chunk_name).exec() {
         return Ok(FileOutcome {
             path,
@@ -225,8 +222,7 @@ pub fn run_file_full(
     // `get::<Table>("provium")` doesn't work — provium is UserData,
     // not Table — so we go through the side table directly.
     // -----------------------------------------------------------------
-    let file_config: Option<Table> =
-        lua.globals().get::<Table>("_provium_file_config").ok();
+    let file_config: Option<Table> = lua.globals().get::<Table>("_provium_file_config").ok();
     let reset_between = file_config
         .as_ref()
         .and_then(|t| t.get::<Value>("reset_between_tests").ok())
@@ -243,8 +239,9 @@ pub fn run_file_full(
         .and_then(|v| match v {
             Value::Integer(n) if n > 0 => Some(std::time::Duration::from_secs(n as u64)),
             Value::Number(n) if n > 0.0 => Some(std::time::Duration::from_secs_f64(n)),
-            Value::String(s) => parse_duration_str(&s.to_str().ok()?)
-                .map(std::time::Duration::from_secs_f64),
+            Value::String(s) => {
+                parse_duration_str(&s.to_str().ok()?).map(std::time::Duration::from_secs_f64)
+            }
             _ => None,
         });
 
@@ -259,9 +256,8 @@ pub fn run_file_full(
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("file.test.lua");
-            let mut msg = format!(
-                "{file_name}: cannot use reset_between_tests with file-scope streams"
-            );
+            let mut msg =
+                format!("{file_name}: cannot use reset_between_tests with file-scope streams");
             for vm in root_lab.vms() {
                 for meta in vm.open_streams_meta() {
                     let site = meta
@@ -492,9 +488,9 @@ pub fn run_file_full(
         // mlua state can't be safely reused after panic. The file's
         // own runner thread then unwinds normally.
         let t_for_panic = t.clone();
-        let outcome_raw = match std::panic::catch_unwind(
-            std::panic::AssertUnwindSafe(|| test_fn.call::<()>(t_for_panic)),
-        ) {
+        let outcome_raw = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            test_fn.call::<()>(t_for_panic)
+        })) {
             Ok(r) => r,
             Err(payload) => {
                 let msg = panic_msg_to_string(&payload);
@@ -506,11 +502,12 @@ pub fn run_file_full(
                 });
                 // Mark every subsequent registered test poisoned and
                 // bail out of the loop.
-                let remaining: Vec<Table> =
-                    registered.clone().sequence_values::<Table>()
-                        .skip(outcomes.len())
-                        .filter_map(Result::ok)
-                        .collect();
+                let remaining: Vec<Table> = registered
+                    .clone()
+                    .sequence_values::<Table>()
+                    .skip(outcomes.len())
+                    .filter_map(Result::ok)
+                    .collect();
                 for entry in remaining {
                     let n: String = entry.get("name").unwrap_or_default();
                     outcomes.push(TestOutcome {
@@ -524,9 +521,7 @@ pub fn run_file_full(
                 }
                 // Clear the in-test flag so file-scope teardown
                 // observes the design's expected state.
-                let _ = lua
-                    .globals()
-                    .set("_provium_current_test", mlua::Value::Nil);
+                let _ = lua.globals().set("_provium_current_test", mlua::Value::Nil);
                 let _ = lua.globals().set("_provium_in_test", false);
                 // Pop the test scope even on panic — otherwise the
                 // file-end teardown runs against a poisoned `provium`
@@ -564,9 +559,7 @@ pub fn run_file_full(
                 //   2. An assertion fired but was swallowed by a
                 //      user-side pcall — `_failed` is sticky.
                 //   3. Clean pass — neither flag set.
-                let outcome_field: String = t
-                    .get("_outcome")
-                    .unwrap_or_else(|_| "pass".into());
+                let outcome_field: String = t.get("_outcome").unwrap_or_else(|_| "pass".into());
                 let failed: bool = t.get("_failed").unwrap_or(false);
                 if outcome_field == "skip" {
                     let reason: Option<String> = t.get("_skip_reason").ok();
@@ -653,10 +646,7 @@ pub fn run_file_full(
         // test-scope registry).
         let _ = lua.globals().set("_provium_current_test", mlua::Value::Nil);
         let _ = lua.globals().set("_provium_in_test", false);
-        if let Ok(close_test) = lua
-            .globals()
-            .get::<Function>("_provium_close_test_scope")
-        {
+        if let Ok(close_test) = lua.globals().get::<Function>("_provium_close_test_scope") {
             let _ = close_test.call::<()>(());
         }
         // Pop the test scope: tear down any VMs that landed in the
@@ -686,28 +676,25 @@ pub fn run_file_full(
             // is already settled); we just complain so the file
             // author can act.
             match std::fs::read_to_string(&meta_path) {
-                Ok(body) => {
-                    match serde_json::from_str::<crate::lab::LabSnapshotMeta>(&body)
-                    {
-                        Ok(meta) => {
-                            if let Err(e) = root_lab.lab_restore(&meta) {
-                                eprintln!(
-                                    "provium: reset_between_tests restore failed in `{}`: \
-                                     {e}\n  Subsequent tests in this file may see leaked state.",
-                                    path.display(),
-                                );
-                            }
-                        }
-                        Err(e) => {
+                Ok(body) => match serde_json::from_str::<crate::lab::LabSnapshotMeta>(&body) {
+                    Ok(meta) => {
+                        if let Err(e) = root_lab.lab_restore(&meta) {
                             eprintln!(
-                                "provium: reset_between_tests baseline metadata corrupt \
-                                 in `{}`: {e}\n  Subsequent tests in this file \
-                                 may see leaked state.",
+                                "provium: reset_between_tests restore failed in `{}`: \
+                                     {e}\n  Subsequent tests in this file may see leaked state.",
                                 path.display(),
                             );
                         }
                     }
-                }
+                    Err(e) => {
+                        eprintln!(
+                            "provium: reset_between_tests baseline metadata corrupt \
+                                 in `{}`: {e}\n  Subsequent tests in this file \
+                                 may see leaked state.",
+                            path.display(),
+                        );
+                    }
+                },
                 Err(e) => {
                     eprintln!(
                         "provium: reset_between_tests baseline metadata unreadable \
@@ -722,10 +709,7 @@ pub fn run_file_full(
 
     // File end — close file-scope resources in reverse-dep order
     // before the final GC sweep.
-    if let Ok(close_file) = lua
-        .globals()
-        .get::<Function>("_provium_close_file_scope")
-    {
+    if let Ok(close_file) = lua.globals().get::<Function>("_provium_close_file_scope") {
         let _ = close_file.call::<()>(());
     }
     let _ = lua.gc_collect();
@@ -786,7 +770,11 @@ fn collect_console_excerpts(lab: &Lab) -> String {
             continue;
         }
         let start = bytes.len().saturating_sub(MAX_PER_VM);
-        out.push_str(&format!("---- vm {} (last {} bytes) ----\n", vm.name(), bytes.len() - start));
+        out.push_str(&format!(
+            "---- vm {} (last {} bytes) ----\n",
+            vm.name(),
+            bytes.len() - start
+        ));
         out.push_str(&String::from_utf8_lossy(&bytes[start..]));
         out.push('\n');
     }
@@ -923,14 +911,10 @@ impl TestFilter {
         if !self.include_slow {
             match meta.get("slow") {
                 Some(MetaValue::Bool(true)) => {
-                    return Some(
-                        "filtered: slow tests skipped (pass --include-slow)".into(),
-                    );
+                    return Some("filtered: slow tests skipped (pass --include-slow)".into());
                 }
                 Some(MetaValue::Int(n)) if *n != 0 => {
-                    return Some(
-                        "filtered: slow tests skipped (pass --include-slow)".into(),
-                    );
+                    return Some("filtered: slow tests skipped (pass --include-slow)".into());
                 }
                 _ => {}
             }
@@ -945,17 +929,14 @@ impl TestFilter {
         // --no-tag-meta: any matching pair filters out.
         for (k, v) in &self.no_tag_meta {
             if meta_field_contains(meta, k, v) {
-                return Some(format!(
-                    "filtered: matched --no-tag-meta ({k}={v})"
-                ));
+                return Some(format!("filtered: matched --no-tag-meta ({k}={v})"));
             }
         }
         // --tag-meta: group pairs by key. Within a key any value
         // matches (OR); across keys all keys must have at least one
         // matching value (AND). A key with no match filters the test.
         if !self.tag_meta.is_empty() {
-            let mut keys: std::collections::BTreeSet<&String> =
-                std::collections::BTreeSet::new();
+            let mut keys: std::collections::BTreeSet<&String> = std::collections::BTreeSet::new();
             for (k, _) in &self.tag_meta {
                 keys.insert(k);
             }
@@ -966,9 +947,7 @@ impl TestFilter {
                     .filter(|(kk, _)| kk == k)
                     .any(|(_, v)| meta_field_contains(meta, k, v));
                 if !any_match {
-                    return Some(format!(
-                        "filtered: did not match any --tag-meta {k}=…"
-                    ));
+                    return Some(format!("filtered: did not match any --tag-meta {k}=…"));
                 }
             }
         }
@@ -1137,4 +1116,3 @@ mod filter_tests {
         assert!(reason.contains("--no-tag-meta"), "reason: {reason}");
     }
 }
-

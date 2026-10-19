@@ -86,9 +86,7 @@ pub fn run(
                 vm.state().as_str()
             ),
             Err(e) => {
-                eprintln!(
-                    "  fixture resume failed ({e}); cold-booting profile instead"
-                );
+                eprintln!("  fixture resume failed ({e}); cold-booting profile instead");
                 vm.boot()?;
                 println!(
                     "  ready: cid={:?} state={}\n",
@@ -128,9 +126,8 @@ pub fn run(
     }
 
     // `exit` / `quit` Lua helpers.
-    let exit_fn: Function = lua.create_function(|_, ()| {
-        Err::<(), _>(mlua::Error::external("__provium_repl_exit"))
-    })?;
+    let exit_fn: Function =
+        lua.create_function(|_, ()| Err::<(), _>(mlua::Error::external("__provium_repl_exit")))?;
     lua.globals().set("exit", exit_fn.clone())?;
     lua.globals().set("quit", exit_fn)?;
 
@@ -197,10 +194,15 @@ fn eval_one(lua: &Lua, line: &str) -> mlua::Result<Vec<Value>> {
     // Expression form: `return <line>` so the chunk produces values.
     let as_expr = format!("return {line}");
     if let Ok(chunk) = lua.load(&as_expr).set_name("=stdin").into_function() {
-        return chunk.call::<mlua::MultiValue>(()).map(|m| m.into_iter().collect());
+        return chunk
+            .call::<mlua::MultiValue>(())
+            .map(|m| m.into_iter().collect());
     }
     // Statement form: just run the line, no return.
-    lua.load(line).set_name("=stdin").exec().map(|()| Vec::new())
+    lua.load(line)
+        .set_name("=stdin")
+        .exec()
+        .map(|()| Vec::new())
 }
 
 fn print_values(lua: &Lua, values: &[Value]) {
@@ -236,8 +238,7 @@ fn lua_tostring(lua: &Lua, v: &Value) -> mlua::Result<String> {
 
 fn history_path() -> std::path::PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
-        return std::path::PathBuf::from(home)
-            .join(".provium_history");
+        return std::path::PathBuf::from(home).join(".provium_history");
     }
     std::path::PathBuf::from("/tmp/.provium_history")
 }
@@ -268,16 +269,14 @@ fn resume_fixture_into(
     // Locate the .fixture.lua under any of the configured roots.
     let mut found: Option<std::path::PathBuf> = None;
     for root in &config.provium.roots {
-        let candidate = std::path::Path::new(root)
-            .join(format!("{fixture_name}.fixture.lua"));
+        let candidate = std::path::Path::new(root).join(format!("{fixture_name}.fixture.lua"));
         if candidate.is_file() {
             found = Some(candidate);
             break;
         }
     }
-    let path = found.ok_or_else(|| {
-        format!("fixture `{fixture_name}` not found under configured roots")
-    })?;
+    let path = found
+        .ok_or_else(|| format!("fixture `{fixture_name}` not found under configured roots"))?;
     let source = read_fixture_source(&path)?;
     // Match the runner / `provium fixture build` exactly: fold in
     // transitively-referenced fixture deps, every profile's
@@ -285,22 +284,13 @@ fn resume_fixture_into(
     // files. Anything this leaves out addresses a different cache
     // entry, so a fixture the runner has just rebuilt looks unbuilt
     // to `--fixture`.
-    let dep_keys = crate::lua::lab_ud_resolve_dep_keys_pub(
-        &config.provium.roots,
-        &source,
-    );
+    let dep_keys = crate::lua::lab_ud_resolve_dep_keys_pub(&config.provium.roots, &source);
     let (kernels, initrds) = canonical_profile_paths_all(config);
-    let kernel_refs: Vec<&std::path::Path> =
-        kernels.iter().map(|p| p.as_path()).collect();
-    let initrd_refs: Vec<&std::path::Path> =
-        initrds.iter().map(|p| p.as_path()).collect();
-    let externals = crate::lua::lab_ud_resolve_external_deps_pub(
-        &config.provium.roots,
-        &path,
-        &source,
-    );
-    let external_refs: Vec<&std::path::Path> =
-        externals.iter().map(|p| p.as_path()).collect();
+    let kernel_refs: Vec<&std::path::Path> = kernels.iter().map(|p| p.as_path()).collect();
+    let initrd_refs: Vec<&std::path::Path> = initrds.iter().map(|p| p.as_path()).collect();
+    let externals =
+        crate::lua::lab_ud_resolve_external_deps_pub(&config.provium.roots, &path, &source);
+    let external_refs: Vec<&std::path::Path> = externals.iter().map(|p| p.as_path()).collect();
     let key = compute_key_with_deps_kernels_and_externals(
         &source,
         &dep_keys,
@@ -350,7 +340,11 @@ impl ReplHelper {
     /// Snapshot the top-level Lua globals so the completer can
     /// suggest bare identifiers (`provium<tab>`, `vm<tab>`, etc.).
     fn augment_from_lua(&mut self, lua: &Lua) {
-        if let Ok(globals) = lua.globals().pairs::<String, mlua::Value>().collect::<mlua::Result<Vec<_>>>() {
+        if let Ok(globals) = lua
+            .globals()
+            .pairs::<String, mlua::Value>()
+            .collect::<mlua::Result<Vec<_>>>()
+        {
             self.globals = globals.into_iter().map(|(k, _)| k).collect();
             self.globals.sort();
             self.globals.dedup();
@@ -400,20 +394,8 @@ impl ReplHelper {
         raw.insert(
             "lab",
             vec![
-                "vm",
-                "bridge",
-                "lab",
-                "include",
-                "remove",
-                "members",
-                "boot",
-                "shutdown",
-                "pause",
-                "resume",
-                "snapshot",
-                "restore",
-                "claim",
-                "barrier",
+                "vm", "bridge", "lab", "include", "remove", "members", "boot", "shutdown", "pause",
+                "resume", "snapshot", "restore", "claim", "barrier",
             ],
         );
         raw.insert(
@@ -474,9 +456,29 @@ impl ReplHelper {
         );
         raw.insert(
             "stream",
-            vec!["next", "read_until", "expect", "drain", "close", "eof", "creation_site"],
+            vec![
+                "next",
+                "read_until",
+                "expect",
+                "drain",
+                "close",
+                "eof",
+                "creation_site",
+            ],
         );
-        raw.insert("file", vec!["read", "read_all", "write", "seek", "tell", "close", "fd", "tail_stream"]);
+        raw.insert(
+            "file",
+            vec![
+                "read",
+                "read_all",
+                "write",
+                "seek",
+                "tell",
+                "close",
+                "fd",
+                "tail_stream",
+            ],
+        );
         raw.insert("clock", vec!["get", "set", "sleep", "advance"]);
         raw.insert(
             "disk",
@@ -498,9 +500,15 @@ impl ReplHelper {
                 "fault_policy",
             ],
         );
-        raw.insert("nic", vec!["counters", "capture", "disconnect", "reconnect"]);
+        raw.insert(
+            "nic",
+            vec!["counters", "capture", "disconnect", "reconnect"],
+        );
         raw.insert("console", vec!["read", "write", "expect", "close"]);
-        raw.insert("worker", vec!["run", "run_async", "syscall", "kill", "join"]);
+        raw.insert(
+            "worker",
+            vec!["run", "run_async", "syscall", "kill", "join"],
+        );
         raw.insert("snap", vec!["delete", "size", "path"]);
         let methods = raw
             .into_iter()

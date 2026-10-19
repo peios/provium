@@ -9,8 +9,7 @@
 use std::io;
 
 use provium_protocol::wire::{
-    AdvanceClockArgs, AgentMessage, ClockTime, GetTimeArgs, OpResult, SetTimeArgs,
-    SleepClockArgs,
+    AdvanceClockArgs, AgentMessage, ClockTime, GetTimeArgs, OpResult, SetTimeArgs, SleepClockArgs,
 };
 
 use super::os_error_from_io;
@@ -44,7 +43,7 @@ pub fn get_time(_args: GetTimeArgs) -> AgentMessage {
 /// in the guest; surfaces EPERM cleanly when missing.
 pub fn set_time(args: SetTimeArgs) -> AgentMessage {
     let ts = libc::timespec {
-        tv_sec: (args.ns / 1_000_000_000) as libc::time_t,
+        tv_sec: (args.ns / 1_000_000_000) as _,
         tv_nsec: (args.ns % 1_000_000_000) as libc::c_long,
     };
     // SAFETY: passing a valid timespec to clock_settime.
@@ -87,7 +86,7 @@ pub fn advance_clock(args: AdvanceClockArgs) -> AgentMessage {
         .saturating_add(i64::from(ts.tv_nsec as i64));
     let target = now_ns.saturating_add(args.ns);
     let target_ts = libc::timespec {
-        tv_sec: (target / 1_000_000_000) as libc::time_t,
+        tv_sec: (target / 1_000_000_000) as _,
         tv_nsec: (target % 1_000_000_000) as libc::c_long,
     };
     let r = unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &target_ts) };

@@ -8,10 +8,9 @@ use std::thread;
 use std::time::Duration;
 
 use provium_protocol::wire::{
-    AgentError, AgentErrorKind, AgentMessage, ExecOk, ExitStatus, GetPidArgs, HostMessage, KillArgs,
-    OpResult,
-    ProcStatusArgs, ProcStdinCloseArgs, ProcStdinWriteArgs, ProcStdinWriteOk, ProcessLiveStatus,
-    RunAsyncArgs, WaitArgs,
+    AgentError, AgentErrorKind, AgentMessage, ExecOk, ExitStatus, GetPidArgs, HostMessage,
+    KillArgs, OpResult, ProcStatusArgs, ProcStdinCloseArgs, ProcStdinWriteArgs, ProcStdinWriteOk,
+    ProcessLiveStatus, RunAsyncArgs, WaitArgs,
 };
 
 use crate::state::{AgentState, ProcessSlot};
@@ -156,12 +155,13 @@ pub fn wait(args: WaitArgs, state: &Arc<AgentState>) -> AgentMessage {
 /// there the agent has to guarantee the op returns.
 pub fn kill(args: KillArgs, state: &Arc<AgentState>) -> AgentMessage {
     if let Some((w, inner)) = state.worker_process(args.handle) {
-        let op = HostMessage::Kill(KillArgs { handle: inner, ..args });
+        let op = HostMessage::Kill(KillArgs {
+            handle: inner,
+            ..args
+        });
         return worker::relay_process_op("kill", w, op, state);
     }
-    let pid = state.with_process_mut(args.handle, |slot| {
-        slot.child.as_ref().map(|c| c.id())
-    });
+    let pid = state.with_process_mut(args.handle, |slot| slot.child.as_ref().map(|c| c.id()));
     let pid = match pid {
         Some(Some(pid)) => pid,
         Some(None) => {
@@ -198,9 +198,7 @@ pub fn get_pid(args: GetPidArgs, state: &Arc<AgentState>) -> AgentMessage {
         let op = HostMessage::GetPid(GetPidArgs { handle: inner });
         return worker::relay_process_op("get_pid", w, op, state);
     }
-    let pid = state.with_process_mut(args.handle, |slot| {
-        slot.child.as_ref().map(|c| c.id())
-    });
+    let pid = state.with_process_mut(args.handle, |slot| slot.child.as_ref().map(|c| c.id()));
     match pid {
         Some(Some(p)) => AgentMessage::GetPidResult(OpResult::Ok(p)),
         Some(None) => AgentMessage::AgentError(AgentError {
@@ -235,10 +233,7 @@ enum WaitOutcome {
     Err(std::io::Error),
 }
 
-fn wait_with_timeout(
-    child: &mut std::process::Child,
-    timeout: Duration,
-) -> WaitOutcome {
+fn wait_with_timeout(child: &mut std::process::Child, timeout: Duration) -> WaitOutcome {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         match child.try_wait() {
@@ -268,7 +263,10 @@ fn wait_with_timeout(
 /// `ProcStdinWrite` — write to a tracked child's stdin.
 pub fn proc_stdin_write(args: ProcStdinWriteArgs, state: &Arc<AgentState>) -> AgentMessage {
     if let Some((w, inner)) = state.worker_process(args.handle) {
-        let op = HostMessage::ProcStdinWrite(ProcStdinWriteArgs { handle: inner, ..args });
+        let op = HostMessage::ProcStdinWrite(ProcStdinWriteArgs {
+            handle: inner,
+            ..args
+        });
         return worker::relay_process_op("proc_stdin_write", w, op, state);
     }
     let outcome = state.with_process_mut(args.handle, |slot| {

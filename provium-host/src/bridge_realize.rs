@@ -77,7 +77,14 @@ pub fn plan_for(bridge: &Bridge) -> BridgePlan {
     for vm in bridge.members() {
         let tap = tap_name_for_vm_on_bridge(&vm, &bridge_name);
         ops.push(NetOp::ip(&["tuntap", "add", "dev", &tap, "mode", "tap"]));
-        ops.push(NetOp::ip(&["link", "set", "dev", &tap, "master", &bridge_name]));
+        ops.push(NetOp::ip(&[
+            "link",
+            "set",
+            "dev",
+            &tap,
+            "master",
+            &bridge_name,
+        ]));
         ops.push(NetOp::ip(&["link", "set", "dev", &tap, "up"]));
     }
 
@@ -135,9 +142,16 @@ pub fn plan_for(bridge: &Bridge) -> BridgePlan {
             ops.push(NetOp {
                 program: "tc",
                 args: vec![
-                    "qdisc".into(), "add".into(), "dev".into(), tap.clone(),
-                    "root".into(), "handle".into(), "1:".into(), "htb".into(),
-                    "default".into(), "10".into(),
+                    "qdisc".into(),
+                    "add".into(),
+                    "dev".into(),
+                    tap.clone(),
+                    "root".into(),
+                    "handle".into(),
+                    "1:".into(),
+                    "htb".into(),
+                    "default".into(),
+                    "10".into(),
                 ],
             });
             let rate_str = format!("{bandwidth_bps}bit");
@@ -145,10 +159,21 @@ pub fn plan_for(bridge: &Bridge) -> BridgePlan {
             ops.push(NetOp {
                 program: "tc",
                 args: vec![
-                    "class".into(), "add".into(), "dev".into(), tap.clone(),
-                    "parent".into(), "1:".into(), "classid".into(), "1:10".into(),
-                    "htb".into(), "rate".into(), rate_str.clone(),
-                    "ceil".into(), rate_str, "burst".into(), burst.to_string(),
+                    "class".into(),
+                    "add".into(),
+                    "dev".into(),
+                    tap.clone(),
+                    "parent".into(),
+                    "1:".into(),
+                    "classid".into(),
+                    "1:10".into(),
+                    "htb".into(),
+                    "rate".into(),
+                    rate_str.clone(),
+                    "ceil".into(),
+                    rate_str,
+                    "burst".into(),
+                    burst.to_string(),
                 ],
             });
             if latency_ms > 0 || drop_rate_pct > 0 {
@@ -307,8 +332,7 @@ mod tests {
             .ops
             .iter()
             .filter(|op| {
-                op.program == "ip"
-                    && op.args.first().map(|s| s.as_str()) == Some("tuntap")
+                op.program == "ip" && op.args.first().map(|s| s.as_str()) == Some("tuntap")
             })
             .map(|op| op.args[3].clone())
             .collect();
@@ -440,15 +464,15 @@ mod tests {
             .iter()
             .filter(|op| op.program == "tc")
             .find(|op| {
-                op.args.iter().any(|s| s == &source_tap)
-                    && op.args.iter().any(|s| s == "netem")
+                op.args.iter().any(|s| s == &source_tap) && op.args.iter().any(|s| s == "netem")
             })
             .expect("netem qdisc");
         assert!(netem.args.iter().any(|s| s == "root"));
         // HTB should NOT appear.
-        let has_htb = plan.ops.iter().any(|op| {
-            op.program == "tc" && op.args.iter().any(|s| s == "htb")
-        });
+        let has_htb = plan
+            .ops
+            .iter()
+            .any(|op| op.program == "tc" && op.args.iter().any(|s| s == "htb"));
         assert!(!has_htb, "no bandwidth set → no HTB");
     }
 

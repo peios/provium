@@ -362,10 +362,7 @@ fn open_persists_handle_into_subsequent_read() {
     }
 
     let resp = agent.run_op(HostMessage::Close(CloseArgs { handle }));
-    assert!(matches!(
-        resp,
-        AgentMessage::CloseResult(OpResult::Ok(()))
-    ));
+    assert!(matches!(resp, AgentMessage::CloseResult(OpResult::Ok(()))));
     assert_eq!(agent.state.open_file_count(), 0);
 }
 
@@ -499,10 +496,7 @@ fn stat_classifies_regular_file() {
     match resp {
         AgentMessage::StatResult(OpResult::Ok(m)) => {
             assert_eq!(m.size, 3);
-            assert_eq!(
-                m.entry_type,
-                provium_protocol::wire::EntryType::File
-            );
+            assert_eq!(m.entry_type, provium_protocol::wire::EntryType::File);
             assert!(m.perm <= 0o7777);
         }
         other => panic!("{other:?}"),
@@ -599,7 +593,10 @@ fn tail_file_at_end_skips_existing_content() {
 
     // Append after open; first frame should contain only the new bytes.
     {
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         f.write_all(b"new\n").unwrap();
     }
 

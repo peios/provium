@@ -20,7 +20,8 @@ fn cfg_dir() -> tempfile::TempDir {
     std::fs::write(
         dir.path().join("dummy.test.lua"),
         "test('x', function(t) end)",
-    ).unwrap();
+    )
+    .unwrap();
     dir
 }
 
@@ -30,14 +31,18 @@ fn overcommit_below_half_clamps_with_notice() {
     let cfg = dir.path().join("provium.toml");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
-        .arg("--cpu-overcommit").arg("0.1")
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--cpu-overcommit")
+        .arg("0.1")
         .arg(dir.path())
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("clamped"),
-        "below-range overcommit must print clamp notice: `{stderr}`");
+    assert!(
+        stderr.contains("clamped"),
+        "below-range overcommit must print clamp notice: `{stderr}`"
+    );
 }
 
 #[test]
@@ -46,14 +51,18 @@ fn overcommit_above_eight_clamps_with_notice() {
     let cfg = dir.path().join("provium.toml");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
-        .arg("--cpu-overcommit").arg("100")
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--cpu-overcommit")
+        .arg("100")
         .arg(dir.path())
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("clamped"),
-        "above-range overcommit must clamp with notice: `{stderr}`");
+    assert!(
+        stderr.contains("clamped"),
+        "above-range overcommit must clamp with notice: `{stderr}`"
+    );
 }
 
 #[test]
@@ -62,14 +71,18 @@ fn overcommit_in_range_no_clamp_notice() {
     let cfg = dir.path().join("provium.toml");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
-        .arg("--cpu-overcommit").arg("1.5")
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--cpu-overcommit")
+        .arg("1.5")
         .arg(dir.path())
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stderr.contains("clamped"),
-        "in-range overcommit must NOT print clamp notice: `{stderr}`");
+    assert!(
+        !stderr.contains("clamped"),
+        "in-range overcommit must NOT print clamp notice: `{stderr}`"
+    );
 }
 
 #[test]
@@ -78,11 +91,14 @@ fn overcommit_default_does_not_emit_clamp_notice() {
     let cfg = dir.path().join("provium.toml");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
+        .arg("--config")
+        .arg(&cfg)
         .arg(dir.path())
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!stderr.contains("clamped"),
-        "default overcommit must NOT clamp: `{stderr}`");
+    assert!(
+        !stderr.contains("clamped"),
+        "default overcommit must NOT clamp: `{stderr}`"
+    );
 }

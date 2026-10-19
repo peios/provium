@@ -35,7 +35,7 @@ use crate::agent_client::AgentClient;
 use crate::cid::CidAllocator;
 use crate::connector::VsockConnector;
 use crate::profile::Profile;
-use crate::vmm::{Backend, BootOpts, BootSummary, Vmm, VmInstance, VmRunning, VmmError};
+use crate::vmm::{Backend, BootOpts, BootSummary, VmInstance, VmRunning, Vmm, VmmError};
 use crate::ClientError;
 
 // ---------------------------------------------------------------------------
@@ -181,12 +181,7 @@ impl Default for QemuVmm {
 }
 
 impl Vmm for QemuVmm {
-    fn launch(
-        &self,
-        name: &str,
-        profile: &Profile,
-        opts: BootOpts,
-    ) -> Result<VmRunning, VmmError> {
+    fn launch(&self, name: &str, profile: &Profile, opts: BootOpts) -> Result<VmRunning, VmmError> {
         self.launch_or_restore(name, profile, opts, None)
     }
 
@@ -260,272 +255,274 @@ impl QemuVmm {
         //     without a bridge handle (graph-state-only) skip this.
         for nic in &opts.nic_attachments {
             if let Some(bridge) = &nic.bridge {
-                bridge
-                    .realize_for_vm(name)
-                    .map_err(VmmError::Io)?;
+                bridge.realize_for_vm(name).map_err(VmmError::Io)?;
             }
         }
 
         let mut cid_attempts = 0u32;
         let (cid, scratch, console_log, console_socket, child, qmp, memory_bytes, cpus, mediated) = 'launch: loop {
-        // 2. CID + scratch dir. The scratch directory is named by the
-        // CID and created with a plain (non-recursive) create_dir, which
-        // is atomic on every filesystem provium runs on: whichever
-        // provium process creates `vm-<cid>` first owns that CID, and a
-        // second process — or a stale directory from a crashed run —
-        // makes the allocator move on. Without this, two provium
-        // processes started together both count from the same base and
-        // launch two QEMUs with one guest CID; vhost-vsock refuses the
-        // second and it dies before its QMP socket appears.
-        std::fs::create_dir_all(&self.config.scratch_root)?;
-        let (cid, scratch) = loop {
-            let cid = self.cids.allocate();
-            let scratch = self.config.scratch_root.join(format!("vm-{cid}"));
-            match std::fs::create_dir(&scratch) {
-                Ok(()) => break (cid, scratch),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(e.into()),
-            }
-        };
-        let qmp_socket = scratch.join("qmp.sock");
-        let console_log = scratch.join("console.log");
-        let console_socket = scratch.join("console.sock");
-
-        let (memory_bytes, cpus) = opts.sizing();
-        let mut raw_cmdline = opts
-            .cmdline_override
-            .clone()
-            .map(Ok)
-            .unwrap_or_else(|| profile.resolve_cmdline())?;
-        // `kernel_cmdline_append`: extra tokens after whichever line won
-        // above. Appending keeps the profile's console/panic/test-hook
-        // tokens intact and lets the appended ones win where they
-        // repeat one (the kernel takes the last occurrence).
-        if let Some(extra) = opts.cmdline_append.as_deref().map(str::trim) {
-            if !extra.is_empty() {
-                raw_cmdline = format!("{} {}", raw_cmdline.trim_end(), extra);
-            }
-        }
-
-        // 2b. Agent-overlay injection. Concatenates a small cpio
-        //     containing /sbin/provium-agent onto the user's initrd
-        //     and appends rdinit=/sbin/provium-agent to the cmdline
-        //     so the kernel exec's the agent as PID 1; the agent
-        //     itself forks the user's /init. Cached on the merged
-        //     content hash so repeat boots are free. Skipped per
-        //     `profile.inject_agent = false`.
-        // Ensure the kernel's printk is captured. The serial port is
-        // the only console QEMU's chardev mirrors into `console.log`,
-        // so a cmdline that only sets `console=hvc0` (virtio-console)
-        // produces a guest where SeaBIOS is visible but the kernel
-        // itself prints to a device that doesn't exist or isn't
-        // wired to a logfile. Add `console=ttyS0` if absent — the
-        // kernel happily uses multiple consoles, so user-set values
-        // are preserved alongside.
-        let raw_cmdline = ensure_serial_console(&raw_cmdline);
-
-        let prepared = crate::vmm::agent_overlay::prepare_initrd(
-            profile,
-            &raw_cmdline,
-            &self.config.scratch_root,
-        )?;
-        if crate::verbosity::is_verbose() {
-            if prepared.injected {
-                eprintln!(
-                    "provium: vm {name}: agent overlay injected (initrd {})",
-                    prepared.initrd_path.display(),
-                );
-            } else {
-                eprintln!(
-                    "provium: vm {name}: agent overlay skipped (inject_agent = false)",
-                );
-            }
-        }
-        // 2c. Per-boot file injection. `vm:boot({files = …})` becomes a
-        //     third cpio appended after the profile's initrd and the
-        //     agent overlay, so the kernel unpacks it last and a test's
-        //     file wins over both. Written into this VM's scratch dir —
-        //     the content is per boot, so there is nothing to cache.
-        let initrd_for_qemu = if opts.files.is_empty() {
-            prepared.initrd_path.clone()
-        } else {
-            let path = scratch.join("initrd-with-files.cpio.gz");
-            let mut bytes = if prepared.initrd_path.as_os_str().is_empty() {
-                Vec::new()
-            } else {
-                std::fs::read(&prepared.initrd_path)?
-            };
-            bytes.extend_from_slice(&crate::vmm::files_cpio::build_segment(&opts.files));
-            std::fs::write(&path, bytes)?;
-            if crate::verbosity::is_verbose() {
-                eprintln!(
-                    "provium: vm {name}: {} injected file(s) appended to the initrd",
-                    opts.files.len(),
-                );
-            }
-            path
-        };
-        let cmdline = prepared.cmdline.clone();
-
-        // 2d. Mediated disks. Each gets an NBD server of provium's own,
-        //     listening on a socket in this VM's scratch directory, and
-        //     QEMU is pointed at that instead of the image. The servers
-        //     are declared here, inside the CID-retry loop, so a launch
-        //     that restarts drops the previous attempt's servers and
-        //     their sockets rather than leaking them.
-        //
-        //     The socket lives beside the QMP one because a unix socket
-        //     address is capped at 108 bytes: the default scratch root
-        //     is under /tmp and leaves plenty of room, but a caller that
-        //     overrides it with something deeply nested will be told so
-        //     by the bind, naming the socket.
-        let mut mediated: Vec<(String, crate::nbd::MediatedDisk)> = Vec::new();
-        let mut launch_disks: Vec<LaunchDisk> = Vec::with_capacity(disks.len());
-        for disk in &disks {
-            if disk.mediated {
-                let socket = scratch.join(format!("{}.nbd.sock", disk.id));
-                let server = crate::nbd::MediatedDisk::start(&disk.path, &socket)
-                    .map_err(|e| {
-                        VmmError::Io(std::io::Error::other(format!(
-                            "mediated disk `{}`: {e}",
-                            disk.id
-                        )))
-                    })?;
-                launch_disks.push(LaunchDisk {
-                    id: disk.id.clone(),
-                    file: opt_value_str(&server.qemu_url()),
-                    readonly: disk.readonly,
-                    mediated: true,
-                });
-                mediated.push((disk.id.clone(), server));
-            } else {
-                launch_disks.push(LaunchDisk {
-                    id: disk.id.clone(),
-                    file: opt_value(&disk.path),
-                    readonly: disk.readonly,
-                    mediated: false,
-                });
-            }
-        }
-
-        let plan = QemuLaunchPlan {
-            qemu_binary: &self.config.qemu_binary,
-            vm_name: name,
-            kernel: &kernel,
-            initrd: &initrd_for_qemu,
-            cmdline: &cmdline,
-            cid,
-            memory_bytes,
-            cpus,
-            qmp_socket: &qmp_socket,
-            console_log: &console_log,
-            console_socket: &console_socket,
-            nics: &opts.nic_attachments,
-            disks: &launch_disks,
-            ksm_enabled: self.config.ksm_enabled,
-            rng_seed: opts.rng_seed,
-            initial_time_ns: opts.initial_time_ns,
-            incoming_snapshot,
-        };
-
-        // 3. Spawn QEMU.
-        let mut command = build_qemu_command(&plan);
-        // QEMU's own diagnostics go to a file beside the sockets, so a
-        // launch that dies before QMP answers can say why.
-        let qemu_stderr = scratch.join("qemu.stderr");
-        let stderr_sink = std::fs::File::create(&qemu_stderr)
-            .map(Stdio::from)
-            .unwrap_or_else(|_| Stdio::null());
-        command
-            .stdout(Stdio::null())
-            .stderr(stderr_sink)
-            .stdin(Stdio::null());
-        // PR_SET_PDEATHSIG so QEMU dies if provium itself is
-        // SIGKILLed / segfaults / OOM-killed. Without this the
-        // QEMU children become orphans and survive the parent.
-        // Per `DESIGN.md` § Failure mode catalogue ("All VM
-        // children die").
-        unsafe {
-            use std::os::unix::process::CommandExt;
-            command.pre_exec(|| {
-                let r = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-                if r != 0 {
-                    return Err(std::io::Error::last_os_error());
+            // 2. CID + scratch dir. The scratch directory is named by the
+            // CID and created with a plain (non-recursive) create_dir, which
+            // is atomic on every filesystem provium runs on: whichever
+            // provium process creates `vm-<cid>` first owns that CID, and a
+            // second process — or a stale directory from a crashed run —
+            // makes the allocator move on. Without this, two provium
+            // processes started together both count from the same base and
+            // launch two QEMUs with one guest CID; vhost-vsock refuses the
+            // second and it dies before its QMP socket appears.
+            std::fs::create_dir_all(&self.config.scratch_root)?;
+            let (cid, scratch) = loop {
+                let cid = self.cids.allocate();
+                let scratch = self.config.scratch_root.join(format!("vm-{cid}"));
+                match std::fs::create_dir(&scratch) {
+                    Ok(()) => break (cid, scratch),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(e.into()),
                 }
-                Ok(())
-            });
-        }
-        let child = command.spawn()?;
+            };
+            let qmp_socket = scratch.join("qmp.sock");
+            let console_log = scratch.join("console.log");
+            let console_socket = scratch.join("console.sock");
 
-        // SCHED_BATCH per DESIGN.md § Scheduler. Failures are
-        // logged + ignored — the design explicitly accepts this.
-        // SAFETY: child.id() is the kernel-assigned pid that's
-        // valid for the duration of `child`'s lifetime.
-        unsafe {
-            let policy = libc::SCHED_BATCH;
-            let param = libc::sched_param { sched_priority: 0 };
-            let r = libc::sched_setscheduler(
-                child.id() as libc::pid_t,
-                policy,
-                &param,
-            );
-            if r != 0 {
-                let e = std::io::Error::last_os_error();
-                eprintln!(
-                    "provium: SCHED_BATCH on QEMU pid {} skipped: {e}",
-                    child.id()
-                );
+            let (memory_bytes, cpus) = opts.sizing();
+            let mut raw_cmdline = opts
+                .cmdline_override
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| profile.resolve_cmdline())?;
+            // `kernel_cmdline_append`: extra tokens after whichever line won
+            // above. Appending keeps the profile's console/panic/test-hook
+            // tokens intact and lets the appended ones win where they
+            // repeat one (the kernel takes the last occurrence).
+            if let Some(extra) = opts.cmdline_append.as_deref().map(str::trim) {
+                if !extra.is_empty() {
+                    raw_cmdline = format!("{} {}", raw_cmdline.trim_end(), extra);
+                }
             }
-        }
 
-        // 4. Wait for the QMP socket file to appear, then connect.
-        if let Err(e) = wait_for_path(&qmp_socket, QMP_SOCKET_WAIT) {
-            // QEMU may have exited early (bad kernel, missing KVM, …).
-            // Surface that as a clearer error than "socket never
-            // appeared".
-            let _ = kill_child(&child);
-            let _ = std::fs::remove_dir_all(&scratch);
-            return Err(VmmError::Io(e));
-        }
-        // The socket file exists (QEMU `bind()`ed it), but QEMU may not
-        // be `listen()`ing yet — connecting in that window yields
-        // ECONNREFUSED. Retry briefly so a fast host doesn't lose the race.
-        let qmp = {
-            let deadline = Instant::now() + QMP_CONNECT_RETRY;
-            loop {
-                match Qmp::connect(&qmp_socket) {
-                    Ok(q) => break q,
-                    Err(e) => {
-                        if Instant::now() >= deadline {
-                            let _ = kill_child(&child);
-                            let said = std::fs::read_to_string(&qemu_stderr)
-                                .unwrap_or_default();
-                            let _ = std::fs::remove_dir_all(&scratch);
-                            let said = said.trim();
-                            // A guest CID held by a VM whose scratch
-                            // directory is gone (an orphan from a crashed
-                            // run, or a VM that exited inside the kernel's
-                            // post-exit grace) is not ours to wait for:
-                            // take the next CID and launch again.
-                            if said.contains("unable to set guest cid")
-                                && cid_attempts < CID_RETRY_ATTEMPTS
-                            {
-                                cid_attempts += 1;
-                                continue 'launch;
+            // 2b. Agent-overlay injection. Concatenates a small cpio
+            //     containing /sbin/provium-agent onto the user's initrd
+            //     and appends rdinit=/sbin/provium-agent to the cmdline
+            //     so the kernel exec's the agent as PID 1; the agent
+            //     itself forks the user's /init. Cached on the merged
+            //     content hash so repeat boots are free. Skipped per
+            //     `profile.inject_agent = false`.
+            // Ensure the kernel's printk is captured. The serial port is
+            // the only console QEMU's chardev mirrors into `console.log`,
+            // so a cmdline that only sets `console=hvc0` (virtio-console)
+            // produces a guest where SeaBIOS is visible but the kernel
+            // itself prints to a device that doesn't exist or isn't
+            // wired to a logfile. Add `console=ttyS0` if absent — the
+            // kernel happily uses multiple consoles, so user-set values
+            // are preserved alongside.
+            let raw_cmdline = ensure_serial_console(&raw_cmdline);
+
+            let prepared = crate::vmm::agent_overlay::prepare_initrd(
+                profile,
+                &raw_cmdline,
+                &self.config.scratch_root,
+            )?;
+            if crate::verbosity::is_verbose() {
+                if prepared.injected {
+                    eprintln!(
+                        "provium: vm {name}: agent overlay injected (initrd {})",
+                        prepared.initrd_path.display(),
+                    );
+                } else {
+                    eprintln!("provium: vm {name}: agent overlay skipped (inject_agent = false)",);
+                }
+            }
+            // 2c. Per-boot file injection. `vm:boot({files = …})` becomes a
+            //     third cpio appended after the profile's initrd and the
+            //     agent overlay, so the kernel unpacks it last and a test's
+            //     file wins over both. Written into this VM's scratch dir —
+            //     the content is per boot, so there is nothing to cache.
+            let initrd_for_qemu = if opts.files.is_empty() {
+                prepared.initrd_path.clone()
+            } else {
+                let path = scratch.join("initrd-with-files.cpio.gz");
+                let mut bytes = if prepared.initrd_path.as_os_str().is_empty() {
+                    Vec::new()
+                } else {
+                    std::fs::read(&prepared.initrd_path)?
+                };
+                bytes.extend_from_slice(&crate::vmm::files_cpio::build_segment(&opts.files));
+                std::fs::write(&path, bytes)?;
+                if crate::verbosity::is_verbose() {
+                    eprintln!(
+                        "provium: vm {name}: {} injected file(s) appended to the initrd",
+                        opts.files.len(),
+                    );
+                }
+                path
+            };
+            let cmdline = prepared.cmdline.clone();
+
+            // 2d. Mediated disks. Each gets an NBD server of provium's own,
+            //     listening on a socket in this VM's scratch directory, and
+            //     QEMU is pointed at that instead of the image. The servers
+            //     are declared here, inside the CID-retry loop, so a launch
+            //     that restarts drops the previous attempt's servers and
+            //     their sockets rather than leaking them.
+            //
+            //     The socket lives beside the QMP one because a unix socket
+            //     address is capped at 108 bytes: the default scratch root
+            //     is under /tmp and leaves plenty of room, but a caller that
+            //     overrides it with something deeply nested will be told so
+            //     by the bind, naming the socket.
+            let mut mediated: Vec<(String, crate::nbd::MediatedDisk)> = Vec::new();
+            let mut launch_disks: Vec<LaunchDisk> = Vec::with_capacity(disks.len());
+            for disk in &disks {
+                if disk.mediated {
+                    let socket = scratch.join(format!("{}.nbd.sock", disk.id));
+                    let server =
+                        crate::nbd::MediatedDisk::start(&disk.path, &socket).map_err(|e| {
+                            VmmError::Io(std::io::Error::other(format!(
+                                "mediated disk `{}`: {e}",
+                                disk.id
+                            )))
+                        })?;
+                    launch_disks.push(LaunchDisk {
+                        id: disk.id.clone(),
+                        file: opt_value_str(&server.qemu_url()),
+                        readonly: disk.readonly,
+                        mediated: true,
+                    });
+                    mediated.push((disk.id.clone(), server));
+                } else {
+                    launch_disks.push(LaunchDisk {
+                        id: disk.id.clone(),
+                        file: opt_value(&disk.path),
+                        readonly: disk.readonly,
+                        mediated: false,
+                    });
+                }
+            }
+
+            let plan = QemuLaunchPlan {
+                qemu_binary: &self.config.qemu_binary,
+                vm_name: name,
+                kernel: &kernel,
+                initrd: &initrd_for_qemu,
+                cmdline: &cmdline,
+                cid,
+                memory_bytes,
+                cpus,
+                qmp_socket: &qmp_socket,
+                console_log: &console_log,
+                console_socket: &console_socket,
+                nics: &opts.nic_attachments,
+                disks: &launch_disks,
+                ksm_enabled: self.config.ksm_enabled,
+                rng_seed: opts.rng_seed,
+                initial_time_ns: opts.initial_time_ns,
+                incoming_snapshot,
+            };
+
+            // 3. Spawn QEMU.
+            let mut command = build_qemu_command(&plan);
+            // QEMU's own diagnostics go to a file beside the sockets, so a
+            // launch that dies before QMP answers can say why.
+            let qemu_stderr = scratch.join("qemu.stderr");
+            let stderr_sink = std::fs::File::create(&qemu_stderr)
+                .map(Stdio::from)
+                .unwrap_or_else(|_| Stdio::null());
+            command
+                .stdout(Stdio::null())
+                .stderr(stderr_sink)
+                .stdin(Stdio::null());
+            // PR_SET_PDEATHSIG so QEMU dies if provium itself is
+            // SIGKILLed / segfaults / OOM-killed. Without this the
+            // QEMU children become orphans and survive the parent.
+            // Per `DESIGN.md` § Failure mode catalogue ("All VM
+            // children die").
+            unsafe {
+                use std::os::unix::process::CommandExt;
+                command.pre_exec(|| {
+                    let r = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                    if r != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let child = command.spawn()?;
+
+            // SCHED_BATCH per DESIGN.md § Scheduler. Failures are
+            // logged + ignored — the design explicitly accepts this.
+            // SAFETY: child.id() is the kernel-assigned pid that's
+            // valid for the duration of `child`'s lifetime.
+            unsafe {
+                let policy = libc::SCHED_BATCH;
+                let param = libc::sched_param { sched_priority: 0 };
+                let r = libc::sched_setscheduler(child.id() as libc::pid_t, policy, &param);
+                if r != 0 {
+                    let e = std::io::Error::last_os_error();
+                    eprintln!(
+                        "provium: SCHED_BATCH on QEMU pid {} skipped: {e}",
+                        child.id()
+                    );
+                }
+            }
+
+            // 4. Wait for the QMP socket file to appear, then connect.
+            if let Err(e) = wait_for_path(&qmp_socket, QMP_SOCKET_WAIT) {
+                // QEMU may have exited early (bad kernel, missing KVM, …).
+                // Surface that as a clearer error than "socket never
+                // appeared".
+                let _ = kill_child(&child);
+                let _ = std::fs::remove_dir_all(&scratch);
+                return Err(VmmError::Io(e));
+            }
+            // The socket file exists (QEMU `bind()`ed it), but QEMU may not
+            // be `listen()`ing yet — connecting in that window yields
+            // ECONNREFUSED. Retry briefly so a fast host doesn't lose the race.
+            let qmp = {
+                let deadline = Instant::now() + QMP_CONNECT_RETRY;
+                loop {
+                    match Qmp::connect(&qmp_socket) {
+                        Ok(q) => break q,
+                        Err(e) => {
+                            if Instant::now() >= deadline {
+                                let _ = kill_child(&child);
+                                let said =
+                                    std::fs::read_to_string(&qemu_stderr).unwrap_or_default();
+                                let _ = std::fs::remove_dir_all(&scratch);
+                                let said = said.trim();
+                                // A guest CID held by a VM whose scratch
+                                // directory is gone (an orphan from a crashed
+                                // run, or a VM that exited inside the kernel's
+                                // post-exit grace) is not ours to wait for:
+                                // take the next CID and launch again.
+                                if said.contains("unable to set guest cid")
+                                    && cid_attempts < CID_RETRY_ATTEMPTS
+                                {
+                                    cid_attempts += 1;
+                                    continue 'launch;
+                                }
+                                if !said.is_empty() {
+                                    return Err(VmmError::Io(std::io::Error::other(format!(
+                                        "QMP connect failed ({e}); qemu said: {said}"
+                                    ))));
+                                }
+                                return Err(VmmError::Qmp(e));
                             }
-                            if !said.is_empty() {
-                                return Err(VmmError::Io(std::io::Error::other(format!(
-                                    "QMP connect failed ({e}); qemu said: {said}"
-                                ))));
-                            }
-                            return Err(VmmError::Qmp(e));
+                            thread::sleep(QMP_CONNECT_INTERVAL);
                         }
-                        thread::sleep(QMP_CONNECT_INTERVAL);
                     }
                 }
-            }
-        };
-        break (cid, scratch, console_log, console_socket, child, qmp, memory_bytes, cpus, mediated);
+            };
+            break (
+                cid,
+                scratch,
+                console_log,
+                console_socket,
+                child,
+                qmp,
+                memory_bytes,
+                cpus,
+                mediated,
+            );
         };
 
         // 4b. If we launched with `-incoming`, drain the inbound
@@ -539,15 +536,12 @@ impl QemuVmm {
         //     QMP — events buffered before connect are not
         //     redelivered, but the status is always queryable.
         if incoming_snapshot.is_some() {
-            if let Err(e) =
-                wait_incoming_migration(&qmp, INCOMING_MIGRATION_TIMEOUT)
-            {
+            if let Err(e) = wait_incoming_migration(&qmp, INCOMING_MIGRATION_TIMEOUT) {
                 let console_tail = read_console_tail(&console_log, 4096);
                 let _ = qmp.quit();
                 let _ = kill_child(&child);
                 let _ = std::fs::remove_dir_all(&scratch);
-                let mut msg =
-                    format!("incoming migration did not complete: {e}");
+                let mut msg = format!("incoming migration did not complete: {e}");
                 if let Some(tail) = console_tail {
                     msg.push_str("\n--- guest console (last bytes) ---\n");
                     msg.push_str(&tail);
@@ -779,10 +773,7 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
     ]);
     cmd.args([
         "-qmp",
-        &format!(
-            "unix:{},server=on,wait=off",
-            path_arg(plan.qmp_socket)
-        ),
+        &format!("unix:{},server=on,wait=off", path_arg(plan.qmp_socket)),
     ]);
     // Bidirectional console: socket chardev with `logfile=` mirroring
     // the byte stream into `console_log` (so the existing file-based
@@ -838,10 +829,8 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
     // attachment. Uses the bridge_realize::tap_name_for_vm convention
     // so the host-side TAP created by Bridge::realize_for_vm matches.
     for nic in plan.nics {
-        let tap_ifname = crate::bridge_realize::tap_name_for_vm_on_bridge(
-            plan.vm_name,
-            &nic.bridge_name,
-        );
+        let tap_ifname =
+            crate::bridge_realize::tap_name_for_vm_on_bridge(plan.vm_name, &nic.bridge_name);
         cmd.args([
             "-netdev",
             &format!(
@@ -856,10 +845,7 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
         // the NIC id (`<vm>-<bridge>`): stable across boots, distinct
         // per VM and bridge, in QEMU's locally administered 52:54:00.
         let mac = nic.mac.clone().unwrap_or_else(|| nic_mac_for(&nic.nic_id));
-        let device = format!(
-            "virtio-net-pci,netdev={id},mac={mac}",
-            id = nic.nic_id
-        );
+        let device = format!("virtio-net-pci,netdev={id},mac={mac}", id = nic.nic_id);
         cmd.args(["-device", &device]);
     }
     // Disks — one `-drive if=none` + `-device virtio-blk-pci` pair per
@@ -920,7 +906,6 @@ pub fn build_qemu_command(plan: &QemuLaunchPlan<'_>) -> Command {
     }
     cmd
 }
-
 
 /// Frozen inputs for [`build_interactive_qemu_command`].
 ///
@@ -1150,7 +1135,10 @@ fn wait_for_path(path: &Path, timeout: Duration) -> std::io::Result<()> {
         if Instant::now() >= deadline {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                format!("path `{}` did not appear within {timeout:?}", path.display()),
+                format!(
+                    "path `{}` did not appear within {timeout:?}",
+                    path.display()
+                ),
             ));
         }
         thread::sleep(Duration::from_millis(20));
@@ -1181,9 +1169,7 @@ fn wait_incoming_migration(qmp: &Qmp, timeout: Duration) -> Result<(), String> {
             }
         }
         if Instant::now() >= deadline {
-            return Err(format!(
-                "VM stuck in `inmigrate` state after {timeout:?}"
-            ));
+            return Err(format!("VM stuck in `inmigrate` state after {timeout:?}"));
         }
         thread::sleep(INCOMING_MIGRATION_POLL);
     }
@@ -1302,7 +1288,11 @@ impl QemuBackend {
     /// different mistakes, and an op that silently addressed nothing
     /// would let a test report durability, or resilience, it never
     /// demonstrated.
-    fn mediated_disk(&self, disk_id: &str, op: &str) -> Result<&crate::nbd::MediatedDisk, VmmError> {
+    fn mediated_disk(
+        &self,
+        disk_id: &str,
+        op: &str,
+    ) -> Result<&crate::nbd::MediatedDisk, VmmError> {
         self.mediated
             .iter()
             .find(|(id, _)| id == disk_id)
@@ -1501,10 +1491,12 @@ impl Backend for QemuBackend {
         let qmp = qmp
             .as_ref()
             .ok_or(VmmError::Unimplemented("VM already shut down"))?;
-        self.disk_ports.lock().unwrap().attach(
-            disk_id, image, readonly,
-            |name, args| qmp.execute(name, args).map_err(VmmError::from),
-        )
+        self.disk_ports
+            .lock()
+            .unwrap()
+            .attach(disk_id, image, readonly, |name, args| {
+                qmp.execute(name, args).map_err(VmmError::from)
+            })
     }
 
     fn detach_disk(&self, disk_id: &str) -> Result<(), VmmError> {
@@ -1696,8 +1688,10 @@ mod tests {
         let devices = args_after_all(&args, "-device");
         assert!(devices.contains(&"pcie-root-port,id=medium-port,chassis=1".to_owned()));
         assert!(devices.contains(&"pcie-root-port,id=target-port,chassis=2".to_owned()));
-        assert!(devices.contains(&"virtio-blk-pci,drive=medium-node,id=medium,bus=medium-port".to_owned()));
-        assert!(devices.contains(&"virtio-blk-pci,drive=target-node,id=target,bus=target-port".to_owned()));
+        assert!(devices
+            .contains(&"virtio-blk-pci,drive=medium-node,id=medium,bus=medium-port".to_owned()));
+        assert!(devices
+            .contains(&"virtio-blk-pci,drive=target-node,id=target,bus=target-port".to_owned()));
     }
 
     #[test]
@@ -1885,7 +1879,10 @@ mod tests {
         );
         let cmd = build_qemu_command(&plan);
         let args = collect_args(&cmd);
-        assert_eq!(arg_after(&args, "-M").as_deref(), Some("q35,accel=kvm,memory-backend=mem"));
+        assert_eq!(
+            arg_after(&args, "-M").as_deref(),
+            Some("q35,accel=kvm,memory-backend=mem")
+        );
         // Guest CPU model is not optional. QEMU's default (qemu64) is below
         // x86-64-v2, which the Peios toolchain targets, so omitting -cpu
         // makes every Peios guest abort at startup rather than fail visibly
@@ -1974,7 +1971,10 @@ mod tests {
             .position(|a| a == "-chardev")
             .map(|i| args[i + 1].clone())
             .unwrap();
-        assert!(chardev.contains("logfile=/scratch/console.log"), "got: {chardev}");
+        assert!(
+            chardev.contains("logfile=/scratch/console.log"),
+            "got: {chardev}"
+        );
     }
 
     #[test]
@@ -1990,7 +1990,10 @@ mod tests {
         let args = collect_args(&cmd);
         assert_eq!(arg_after(&args, "-kernel").as_deref(), Some("/k/img"));
         assert_eq!(arg_after(&args, "-initrd").as_deref(), Some("/i/img"));
-        assert_eq!(arg_after(&args, "-append").as_deref(), Some("console=hvc0 quiet"));
+        assert_eq!(
+            arg_after(&args, "-append").as_deref(),
+            Some("console=hvc0 quiet")
+        );
     }
 
     #[test]
@@ -2062,10 +2065,7 @@ mod tests {
 
     #[test]
     fn format_unix_ns_iso8601_handles_known_values() {
-        assert_eq!(
-            format_unix_ns_iso8601(0).unwrap(),
-            "1970-01-01T00:00:00"
-        );
+        assert_eq!(format_unix_ns_iso8601(0).unwrap(), "1970-01-01T00:00:00");
         assert_eq!(
             format_unix_ns_iso8601(1_704_164_645_000_000_000).unwrap(),
             "2024-01-02T03:04:05"
@@ -2105,7 +2105,9 @@ mod tests {
             dir: None,
         };
         match validate_profile_paths(&profile, &profile.kernel) {
-            Err(VmmError::MissingProfilePath { field: "kernel", .. }) => {}
+            Err(VmmError::MissingProfilePath {
+                field: "kernel", ..
+            }) => {}
             other => panic!("expected MissingProfilePath kernel, got {other:?}"),
         }
     }
@@ -2196,8 +2198,14 @@ mod tests {
         let cmd = build_interactive_qemu_command(&plan);
         let args = collect_args(&cmd);
         let append = arg_after(&args, "-append").unwrap();
-        assert!(append.contains("console=hvc0"), "preserves user console: {append}");
-        assert!(append.contains("console=ttyS0"), "adds serial console: {append}");
+        assert!(
+            append.contains("console=hvc0"),
+            "preserves user console: {append}"
+        );
+        assert!(
+            append.contains("console=ttyS0"),
+            "adds serial console: {append}"
+        );
     }
 
     #[test]
@@ -2214,7 +2222,10 @@ mod tests {
         plan.cid = Some(77);
         let cmd = build_interactive_qemu_command(&plan);
         let args = collect_args(&cmd);
-        assert!(args.iter().any(|a| a == "vhost-vsock-pci,guest-cid=77"), "got {args:?}");
+        assert!(
+            args.iter().any(|a| a == "vhost-vsock-pci,guest-cid=77"),
+            "got {args:?}"
+        );
     }
 
     #[test]
@@ -2223,7 +2234,10 @@ mod tests {
         let plan = fake_interactive(Path::new("/k"), Path::new("/i"), &extra);
         let cmd = build_interactive_qemu_command(&plan);
         let args = collect_args(&cmd);
-        assert_eq!(arg_after(&args, "-drive").as_deref(), Some("file=disk.img,if=virtio"));
+        assert_eq!(
+            arg_after(&args, "-drive").as_deref(),
+            Some("file=disk.img,if=virtio")
+        );
     }
 
     #[test]

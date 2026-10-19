@@ -35,10 +35,7 @@ pub trait AgentStream: Read + Write + Send + 'static {
     /// Set the read timeout on the underlying socket. `None`
     /// clears. Default-impl is `NotSupported` so types that don't
     /// support timeouts are handled.
-    fn set_read_timeout(
-        &self,
-        _timeout: Option<std::time::Duration>,
-    ) -> io::Result<()> {
+    fn set_read_timeout(&self, _timeout: Option<std::time::Duration>) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "set_read_timeout not supported by this stream type",
@@ -49,18 +46,12 @@ pub trait AgentStream: Read + Write + Send + 'static {
 // Concrete-type impls so VsockStream and UnixStream can carry
 // timeouts where the kernel supports it.
 impl AgentStream for VsockStream {
-    fn set_read_timeout(
-        &self,
-        timeout: Option<std::time::Duration>,
-    ) -> io::Result<()> {
+    fn set_read_timeout(&self, timeout: Option<std::time::Duration>) -> io::Result<()> {
         VsockStream::set_read_timeout(self, timeout)
     }
 }
 impl AgentStream for std::os::unix::net::UnixStream {
-    fn set_read_timeout(
-        &self,
-        timeout: Option<std::time::Duration>,
-    ) -> io::Result<()> {
+    fn set_read_timeout(&self, timeout: Option<std::time::Duration>) -> io::Result<()> {
         std::os::unix::net::UnixStream::set_read_timeout(self, timeout)
     }
 }

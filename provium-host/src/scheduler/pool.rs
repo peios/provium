@@ -224,7 +224,12 @@ impl fmt::Display for ResourceAmount {
     /// Human form for error messages: `1.1 GiB and 1 cpu`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = if self.cpus == 1 { "" } else { "s" };
-        write!(f, "{} and {} cpu{s}", fmt_bytes(self.memory_bytes), self.cpus)
+        write!(
+            f,
+            "{} and {} cpu{s}",
+            fmt_bytes(self.memory_bytes),
+            self.cpus
+        )
     }
 }
 
@@ -256,7 +261,10 @@ impl fmt::Display for AcquireError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ExceedsTotal { requested, total } => {
-                write!(f, "requested {requested}, which exceeds the pool's total of {total}")
+                write!(
+                    f,
+                    "requested {requested}, which exceeds the pool's total of {total}"
+                )
             }
             Self::Deadlock(d) => d.fmt(f),
         }
@@ -284,7 +292,11 @@ pub struct Deadlock {
 impl fmt::Display for Deadlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let held = self.total.saturating_sub(self.available);
-        let files = if self.holders == 1 { "file holds" } else { "files hold" };
+        let files = if self.holders == 1 {
+            "file holds"
+        } else {
+            "files hold"
+        };
         write!(
             f,
             "the pool is deadlocked: {} {files} {held} of its {} and every one of them is \
@@ -359,7 +371,9 @@ impl PoolState {
         let owned = self
             .owners
             .values()
-            .fold(ResourceAmount::default(), |acc, o| acc.saturating_add(o.held));
+            .fold(ResourceAmount::default(), |acc, o| {
+                acc.saturating_add(o.held)
+            });
         if owned != self.total.saturating_sub(self.available) {
             return None;
         }
@@ -1069,7 +1083,11 @@ mod tests {
 
         let one = reserve(&pool, Some(&account), budget(1024, 1)).unwrap();
         assert!(matches!(one, Hold::Claim(_)));
-        assert_eq!(pool.available(), budget(2048, 2), "the pool is not charged again");
+        assert_eq!(
+            pool.available(),
+            budget(2048, 2),
+            "the pool is not charged again"
+        );
         assert_eq!(account.claim(), Some((claim, budget(1024, 1))));
 
         let err = reserve(&pool, Some(&account), budget(2048, 2)).unwrap_err();
@@ -1107,7 +1125,11 @@ mod tests {
         assert!(account.set_claim(res, budget(1024, 1)));
         let res = pool.acquire_for(owner, budget(1024, 1)).unwrap();
         assert!(!account.set_claim(res, budget(1024, 1)));
-        assert_eq!(pool.available(), budget(3072, 3), "the refused one is released");
+        assert_eq!(
+            pool.available(),
+            budget(3072, 3),
+            "the refused one is released"
+        );
         assert_eq!(account.release_claim(), Some(budget(1024, 1)));
         assert_eq!(pool.available(), budget(4096, 4));
         assert!(account.claim_taken());
@@ -1142,10 +1164,20 @@ mod tests {
         drop(waiter.join().unwrap());
 
         let settled = sink.waited();
-        assert!(settled >= live, "settling never loses time: {settled:?} < {live:?}");
-        assert!(settled < Duration::from_secs(5), "and it is the wait, not the test");
+        assert!(
+            settled >= live,
+            "settling never loses time: {settled:?} < {live:?}"
+        );
+        assert!(
+            settled < Duration::from_secs(5),
+            "and it is the wait, not the test"
+        );
         thread::sleep(Duration::from_millis(20));
-        assert_eq!(sink.waited(), settled, "nothing accrues once the acquire has returned");
+        assert_eq!(
+            sink.waited(),
+            settled,
+            "nothing accrues once the acquire has returned"
+        );
     }
 
     /// An acquire that never parks costs the caller nothing, so a file

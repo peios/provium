@@ -90,16 +90,14 @@ impl ConsoleStreamUd {
 
 impl UserData for ConsoleStreamUd {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("creation_site", |lua, this, ()| {
-            match &this.creation_site {
-                Some((file, line)) => {
-                    let t = lua.create_table()?;
-                    t.set("file", file.clone())?;
-                    t.set("line", *line)?;
-                    Ok(mlua::Value::Table(t))
-                }
-                None => Ok(mlua::Value::Nil),
+        methods.add_method("creation_site", |lua, this, ()| match &this.creation_site {
+            Some((file, line)) => {
+                let t = lua.create_table()?;
+                t.set("file", file.clone())?;
+                t.set("line", *line)?;
+                Ok(mlua::Value::Table(t))
             }
+            None => Ok(mlua::Value::Nil),
         });
 
         methods.add_method("next", |lua, this, timeout: Option<mlua::Value>| {
@@ -125,9 +123,7 @@ impl UserData for ConsoleStreamUd {
             // returns nil after 50ms instead of waiting.
             if let Some(t) = timeout {
                 let secs = super::result_ud::parse_duration(Some(t), 10.0)?;
-                let _ = sock.set_read_timeout(Some(
-                    Duration::from_secs_f64(secs.max(0.001)),
-                ));
+                let _ = sock.set_read_timeout(Some(Duration::from_secs_f64(secs.max(0.001))));
             }
             let read_result = sock.read(&mut buf);
             // Restore the connect()-time 50ms default so a bare
@@ -182,8 +178,7 @@ impl UserData for ConsoleStreamUd {
             |lua, this, (pattern, timeout): (mlua::String, Option<mlua::Value>)| {
                 let needle = pattern.as_bytes().to_vec();
                 let timeout_secs = super::result_ud::parse_duration(timeout, 10.0)?;
-                let deadline = std::time::Instant::now()
-                    + Duration::from_secs_f64(timeout_secs);
+                let deadline = std::time::Instant::now() + Duration::from_secs_f64(timeout_secs);
                 read_until_inner(this, lua, &needle, deadline, false).map(mlua::Value::String)
             },
         );
@@ -193,8 +188,7 @@ impl UserData for ConsoleStreamUd {
             |_, this, (pattern, timeout): (mlua::String, Option<mlua::Value>)| {
                 let needle = pattern.as_bytes().to_vec();
                 let timeout_secs = super::result_ud::parse_duration(timeout, 10.0)?;
-                let deadline = std::time::Instant::now()
-                    + Duration::from_secs_f64(timeout_secs);
+                let deadline = std::time::Instant::now() + Duration::from_secs_f64(timeout_secs);
                 // expect returns nothing — discards the matched
                 // prefix.
                 expect_inner(this, &needle, deadline)?;
@@ -209,8 +203,8 @@ impl UserData for ConsoleStreamUd {
             // console doesn't block forever waiting for the next
             // chunk; default 0.5s mirrors TailUd::drain.
             let timeout_secs = super::result_ud::parse_duration(timeout, 0.5)?;
-            let deadline = std::time::Instant::now()
-                + Duration::from_secs_f64(timeout_secs.max(0.001));
+            let deadline =
+                std::time::Instant::now() + Duration::from_secs_f64(timeout_secs.max(0.001));
             let mut g = this.inner.lock().unwrap();
             let table = lua.create_table()?;
             let mut idx = 1;
@@ -269,11 +263,7 @@ fn read_until_inner(
     loop {
         {
             let g = this.inner.lock().unwrap();
-            if let Some(idx) = g
-                .pending
-                .windows(needle.len())
-                .position(|w| w == needle)
-            {
+            if let Some(idx) = g.pending.windows(needle.len()).position(|w| w == needle) {
                 drop(g);
                 let mut g2 = this.inner.lock().unwrap();
                 let split_at = idx + needle.len();
@@ -324,11 +314,7 @@ fn expect_inner(
     loop {
         {
             let mut g = this.inner.lock().unwrap();
-            if let Some(idx) = g
-                .pending
-                .windows(needle.len())
-                .position(|w| w == needle)
-            {
+            if let Some(idx) = g.pending.windows(needle.len()).position(|w| w == needle) {
                 // Drain past the match — otherwise a follow-up
                 // `expect`/`read_until` re-matches the same prefix.
                 let consume = idx + needle.len();

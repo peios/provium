@@ -16,7 +16,8 @@ fn config() -> Arc<Config> {
         "peios".into(),
         Profile {
             kernel: "/unused".into(),
-            initrd: "/unused".into(), root: None,
+            initrd: "/unused".into(),
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -25,7 +26,8 @@ fn config() -> Arc<Config> {
             disks: Vec::new(),
             cmdline_file: None,
             build: None,
-            build_out: None, dir: None,
+            build_out: None,
+            dir: None,
         },
     );
     Arc::new(Config {
@@ -38,15 +40,14 @@ fn run(source: &str) -> provium_host::lua::FileOutcome {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("w.test.lua");
     std::fs::write(&path, source).unwrap();
-    let vmm: Arc<dyn Vmm> = Arc::new(LocalAgentVmm::new()
-        .with_worker_executable(env!("CARGO_BIN_EXE_provium")));
+    let vmm: Arc<dyn Vmm> =
+        Arc::new(LocalAgentVmm::new().with_worker_executable(env!("CARGO_BIN_EXE_provium")));
     run_file(&path, config(), vmm).unwrap()
 }
 
 #[test]
 fn spawn_then_run_then_join() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("worker exec", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local w = vm:spawn_worker()
@@ -56,17 +57,19 @@ test("worker exec", function(t)
     t:assert_eq(r.stdout, "hi")
     w:join()
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 #[test]
 fn join_unknown_worker_raises() {
     // Manually fabricate a stale worker by joining twice.
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("double join", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local w = vm:spawn_worker()
@@ -75,8 +78,11 @@ test("double join", function(t)
     t:assert(not ok)
     t:assert_contains(tostring(err), "agent error")
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }

@@ -143,7 +143,10 @@ initrd = "/i"
 cmdline = "x"
 "#;
     let cfg = Config::from_toml_str(toml, Path::new("t.toml")).unwrap();
-    assert_eq!(cfg.provium.roots, vec!["tests".to_string(), "more-tests".to_string()]);
+    assert_eq!(
+        cfg.provium.roots,
+        vec!["tests".to_string(), "more-tests".to_string()]
+    );
 }
 
 #[test]

@@ -8,39 +8,49 @@ use provium_host::vm::{format_wrong_state, VmState};
 #[test]
 fn wrong_state_created_run_says_not_booted() {
     let s = format_wrong_state("a", VmState::Created, "run");
-    assert!(s.contains("not booted"),
-        "Created+run must say 'not booted': {s}");
+    assert!(
+        s.contains("not booted"),
+        "Created+run must say 'not booted': {s}"
+    );
 }
 
 #[test]
 fn wrong_state_booted_boot_says_already_booted() {
     let s = format_wrong_state("a", VmState::Booted, "boot");
-    assert!(s.contains("already booted"),
-        "Booted+boot must say 'already booted': {s}");
+    assert!(
+        s.contains("already booted"),
+        "Booted+boot must say 'already booted': {s}"
+    );
 }
 
 #[test]
 fn wrong_state_paused_run_says_use_resume() {
     let s = format_wrong_state("a", VmState::Paused, "run");
     assert!(s.contains("paused"));
-    assert!(s.contains("resume"),
-        "Paused state must point at resume(): {s}");
+    assert!(
+        s.contains("resume"),
+        "Paused state must point at resume(): {s}"
+    );
 }
 
 #[test]
 fn wrong_state_shutdown_says_create_new() {
     let s = format_wrong_state("a", VmState::Shutdown, "boot");
     assert!(s.contains("shutdown"));
-    assert!(s.contains("create a new"),
-        "Shutdown state must point at creating a new VM: {s}");
+    assert!(
+        s.contains("create a new"),
+        "Shutdown state must point at creating a new VM: {s}"
+    );
 }
 
 #[test]
 fn wrong_state_dead_says_create_new() {
     let s = format_wrong_state("a", VmState::Dead, "run");
     assert!(s.contains("died") || s.contains("dead"));
-    assert!(s.contains("create a new"),
-        "Dead state must point at creating a new VM: {s}");
+    assert!(
+        s.contains("create a new"),
+        "Dead state must point at creating a new VM: {s}"
+    );
 }
 
 #[test]

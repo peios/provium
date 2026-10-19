@@ -30,7 +30,8 @@ fn config_for(test_root: &Path, cache_dir: &Path) -> Arc<Config> {
         "peios".into(),
         Profile {
             kernel: "/unused".into(),
-            initrd: "/unused".into(), root: None,
+            initrd: "/unused".into(),
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -39,7 +40,8 @@ fn config_for(test_root: &Path, cache_dir: &Path) -> Arc<Config> {
             disks: Vec::new(),
             cmdline_file: None,
             build: None,
-            build_out: None, dir: None,
+            build_out: None,
+            dir: None,
         },
     );
     Arc::new(Config {
@@ -110,7 +112,10 @@ end)
 
     // Second run: cache hit. Same outcome.
     let outcome2 = run_file(&test, Arc::clone(&config), Arc::clone(&vmm)).unwrap();
-    assert_eq!(outcome2.tests[0].status, provium_host::lua::TestStatus::Passed);
+    assert_eq!(
+        outcome2.tests[0].status,
+        provium_host::lua::TestStatus::Passed
+    );
 }
 
 #[test]
@@ -138,7 +143,10 @@ end)
     let config = config_for(dir.path(), cache.path());
     let vmm: Arc<dyn Vmm> = Arc::new(LocalAgentVmm::new());
     let outcome = run_file(&test, config, vmm).unwrap();
-    assert_eq!(outcome.tests[0].status, provium_host::lua::TestStatus::Failed);
+    assert_eq!(
+        outcome.tests[0].status,
+        provium_host::lua::TestStatus::Failed
+    );
     let msg = outcome.tests[0].message.as_deref().unwrap_or("");
     assert!(msg.contains("does-not-exist") || msg.contains("not found"));
 }
@@ -169,7 +177,10 @@ end)
     let config = config_for(dir.path(), cache.path());
     let vmm: Arc<dyn Vmm> = Arc::new(LocalAgentVmm::new());
     let outcome = run_file(&test, config, vmm).unwrap();
-    assert_eq!(outcome.tests[0].status, provium_host::lua::TestStatus::Failed);
+    assert_eq!(
+        outcome.tests[0].status,
+        provium_host::lua::TestStatus::Failed
+    );
     let msg = outcome.tests[0].message.as_deref().unwrap_or("");
     assert!(msg.contains("snapshot") || msg.contains("number"));
 }

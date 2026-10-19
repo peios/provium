@@ -19,12 +19,10 @@ use provium_protocol::frame::{read_frame, write_frame, DEFAULT_MAX_FRAME_BYTES};
 use provium_protocol::wire::{
     AdvanceClockArgs, AdvanceClockResult, AgentMessage, CloseArgs, CloseResult, ExecArgs,
     ExecResult, GetPidArgs, GetPidResult, GetTimeArgs, GetTimeResult, Hello, HostMessage, KillArgs,
-    KillResult, OpenFileArgs,
-    OpenFileResult, ReadArgs, ReadFileArgs, ReadFileResult, ReadMemArgs, ReadMemResult, ReadResult,
-    RunAsyncArgs,
-    RunAsyncResult, SetTimeArgs, SetTimeResult, SleepClockArgs, SleepClockResult, StatArgs,
-    StatResult, SyscallArgs, SyscallResult, TailFileArgs, WaitArgs, WaitResult, WriteArgs,
-    WriteFileArgs, WriteFileResult, WriteResult,
+    KillResult, OpenFileArgs, OpenFileResult, ReadArgs, ReadFileArgs, ReadFileResult, ReadMemArgs,
+    ReadMemResult, ReadResult, RunAsyncArgs, RunAsyncResult, SetTimeArgs, SetTimeResult,
+    SleepClockArgs, SleepClockResult, StatArgs, StatResult, SyscallArgs, SyscallResult,
+    TailFileArgs, WaitArgs, WaitResult, WriteArgs, WriteFileArgs, WriteFileResult, WriteResult,
 };
 use provium_protocol::PROTOCOL_VERSION;
 
@@ -121,16 +119,11 @@ impl AgentClient {
 
     /// Batched exec — agent runs each item in order, returns paired
     /// results. One handshake + one round-trip for the whole batch.
-    pub fn batch_exec(
-        &self,
-        items: Vec<ExecArgs>,
-    ) -> Result<Vec<ExecResult>, ClientError> {
+    pub fn batch_exec(&self, items: Vec<ExecArgs>) -> Result<Vec<ExecResult>, ClientError> {
         let mut stream = self.open_with_handshake()?;
         send(
             &mut stream,
-            HostMessage::BatchExec(provium_protocol::wire::ops::BatchExecArgs {
-                items,
-            }),
+            HostMessage::BatchExec(provium_protocol::wire::ops::BatchExecArgs { items }),
         )?;
         match recv(&mut stream)? {
             AgentMessage::BatchExecResult(r) => Ok(r.results),
@@ -143,10 +136,7 @@ impl AgentClient {
     /// the same `AgentState`. One handshake + one round-trip.
     /// Stream / handshake / nested-batch items are rejected by the
     /// agent with an `AgentError` for that index.
-    pub fn batch_op(
-        &self,
-        items: Vec<HostMessage>,
-    ) -> Result<Vec<AgentMessage>, ClientError> {
+    pub fn batch_op(&self, items: Vec<HostMessage>) -> Result<Vec<AgentMessage>, ClientError> {
         let mut stream = self.open_with_handshake()?;
         send(
             &mut stream,
@@ -314,10 +304,7 @@ impl AgentClient {
     }
 
     /// Bump the agent's wall clock by a relative amount.
-    pub fn advance_clock(
-        &self,
-        args: AdvanceClockArgs,
-    ) -> Result<AdvanceClockResult, ClientError> {
+    pub fn advance_clock(&self, args: AdvanceClockArgs) -> Result<AdvanceClockResult, ClientError> {
         let mut stream = self.open_with_handshake()?;
         send(&mut stream, HostMessage::AdvanceClock(args))?;
         match recv(&mut stream)? {
@@ -368,9 +355,7 @@ impl AgentClient {
     }
 
     /// Spawn a sub-agent worker.
-    pub fn spawn_worker(
-        &self,
-    ) -> Result<provium_protocol::wire::SpawnWorkerResult, ClientError> {
+    pub fn spawn_worker(&self) -> Result<provium_protocol::wire::SpawnWorkerResult, ClientError> {
         let mut stream = self.open_with_handshake()?;
         send(
             &mut stream,
@@ -744,10 +729,7 @@ pub enum TailFileOutcome {
 // Free helpers
 // -----------------------------------------------------------------------
 
-pub(crate) fn send(
-    w: &mut Box<dyn AgentStream>,
-    msg: HostMessage,
-) -> Result<(), ClientError> {
+pub(crate) fn send(w: &mut Box<dyn AgentStream>, msg: HostMessage) -> Result<(), ClientError> {
     // `Box<T>` itself implements `Read`/`Write` when `T` does, so we
     // pass the box directly — no `as_mut()` deref to a `dyn` (which
     // would be `?Sized` and rejected by `read_frame`'s generic bound).

@@ -135,7 +135,9 @@ fn sweep_stale_nft_tables() {
         return;
     };
     for entry in arr {
-        let Some(t) = entry.get("table") else { continue };
+        let Some(t) = entry.get("table") else {
+            continue;
+        };
         let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("");
         let family = t.get("family").and_then(|f| f.as_str()).unwrap_or("");
         if name.starts_with("provium_") {
@@ -181,7 +183,8 @@ fn check_kvm() -> Result<(), PreflightError> {
     if !path.exists() {
         return Err(PreflightError::Kvm {
             detail: "device file does not exist".into(),
-            recommendation: "load the kvm module: `sudo modprobe kvm-intel` or `kvm-amd` for your CPU",
+            recommendation:
+                "load the kvm module: `sudo modprobe kvm-intel` or `kvm-amd` for your CPU",
         });
     }
     // Touch test — open for read so a permission failure surfaces
@@ -189,7 +192,8 @@ fn check_kvm() -> Result<(), PreflightError> {
     if let Err(e) = std::fs::File::open(path) {
         return Err(PreflightError::Kvm {
             detail: e.to_string(),
-            recommendation: "ensure you're in the `kvm` group: `sudo usermod -aG kvm $USER` then re-login",
+            recommendation:
+                "ensure you're in the `kvm` group: `sudo usermod -aG kvm $USER` then re-login",
         });
     }
     Ok(())

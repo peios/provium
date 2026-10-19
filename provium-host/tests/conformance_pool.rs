@@ -8,7 +8,10 @@ use std::time::Duration;
 use provium_host::scheduler::pool::{Pool, ResourceAmount};
 
 fn small() -> ResourceAmount {
-    ResourceAmount { memory_bytes: 1024, cpus: 1 }
+    ResourceAmount {
+        memory_bytes: 1024,
+        cpus: 1,
+    }
 }
 
 fn pool_of(memory_bytes: u64, cpus: u32) -> Arc<Pool> {
@@ -27,7 +30,10 @@ fn acquire_exceeding_total_returns_none_immediately() {
     // Per Pool docs: requests exceeding TOTAL fail-fast (vs.
     // exceeding AVAILABLE which would block).
     let pool = pool_of(1024, 1);
-    let r = pool.acquire(ResourceAmount { memory_bytes: 1_000_000, cpus: 1 });
+    let r = pool.acquire(ResourceAmount {
+        memory_bytes: 1_000_000,
+        cpus: 1,
+    });
     assert!(r.is_none(), "exceed-total request must short-circuit");
 }
 
@@ -37,11 +43,17 @@ fn release_via_drop_replenishes_available() {
     let initial = pool.available();
     {
         let _r = pool.acquire(small()).unwrap();
-        assert_ne!(pool.available(), initial,
-            "available must drop while holding reservation");
+        assert_ne!(
+            pool.available(),
+            initial,
+            "available must drop while holding reservation"
+        );
     }
-    assert_eq!(pool.available(), initial,
-        "drop must release back to initial");
+    assert_eq!(
+        pool.available(),
+        initial,
+        "drop must release back to initial"
+    );
 }
 
 #[test]
@@ -83,8 +95,10 @@ fn parallel_acquires_serialize_through_release() {
     // Give the second thread time to enter the wait. It must NOT
     // have completed yet — we still hold r1.
     thread::sleep(Duration::from_millis(50));
-    assert!(!second_done.load(Ordering::SeqCst),
-        "second acquire must block while first holds");
+    assert!(
+        !second_done.load(Ordering::SeqCst),
+        "second acquire must block while first holds"
+    );
     drop(r1);
     h.join().unwrap();
     assert!(second_done.load(Ordering::SeqCst));
@@ -102,8 +116,11 @@ fn pending_count_reflects_blocked_waiters() {
     // Wait briefly for the second thread to actually enter the
     // wait loop.
     thread::sleep(Duration::from_millis(50));
-    assert_eq!(pool.pending_count(), 1,
-        "pending_count must include blocked waiters");
+    assert_eq!(
+        pool.pending_count(),
+        1,
+        "pending_count must include blocked waiters"
+    );
     drop(_hold);
     h.join().unwrap();
     assert_eq!(pool.pending_count(), 0);
@@ -111,8 +128,14 @@ fn pending_count_reflects_blocked_waiters() {
 
 #[test]
 fn resource_amount_addition_is_saturating() {
-    let a = ResourceAmount { memory_bytes: u64::MAX - 10, cpus: u32::MAX - 1 };
-    let b = ResourceAmount { memory_bytes: 100, cpus: 5 };
+    let a = ResourceAmount {
+        memory_bytes: u64::MAX - 10,
+        cpus: u32::MAX - 1,
+    };
+    let b = ResourceAmount {
+        memory_bytes: 100,
+        cpus: 5,
+    };
     let s = a.saturating_add(b);
     assert_eq!(s.memory_bytes, u64::MAX);
     assert_eq!(s.cpus, u32::MAX);
@@ -120,8 +143,14 @@ fn resource_amount_addition_is_saturating() {
 
 #[test]
 fn resource_amount_subtraction_is_saturating() {
-    let a = ResourceAmount { memory_bytes: 100, cpus: 1 };
-    let b = ResourceAmount { memory_bytes: 1000, cpus: 5 };
+    let a = ResourceAmount {
+        memory_bytes: 100,
+        cpus: 1,
+    };
+    let b = ResourceAmount {
+        memory_bytes: 1000,
+        cpus: 5,
+    };
     let s = a.saturating_sub(b);
     assert_eq!(s.memory_bytes, 0);
     assert_eq!(s.cpus, 0);
@@ -129,10 +158,22 @@ fn resource_amount_subtraction_is_saturating() {
 
 #[test]
 fn fits_in_strict_inequality_only_at_boundary() {
-    let budget = ResourceAmount { memory_bytes: 1024, cpus: 4 };
-    let exact = ResourceAmount { memory_bytes: 1024, cpus: 4 };
-    let over_mem = ResourceAmount { memory_bytes: 1025, cpus: 4 };
-    let over_cpus = ResourceAmount { memory_bytes: 1024, cpus: 5 };
+    let budget = ResourceAmount {
+        memory_bytes: 1024,
+        cpus: 4,
+    };
+    let exact = ResourceAmount {
+        memory_bytes: 1024,
+        cpus: 4,
+    };
+    let over_mem = ResourceAmount {
+        memory_bytes: 1025,
+        cpus: 4,
+    };
+    let over_cpus = ResourceAmount {
+        memory_bytes: 1024,
+        cpus: 5,
+    };
     assert!(exact.fits_in(budget), "exact equal must fit");
     assert!(!over_mem.fits_in(budget));
     assert!(!over_cpus.fits_in(budget));

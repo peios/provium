@@ -78,7 +78,10 @@ fn run_against(pool: Arc<Pool>) -> String {
     let results = dispatch_files(vec![path], pool, config(), vmm, opts());
     assert_eq!(results.len(), 1);
     let r = &results[0];
-    assert!(!r.passed(), "an undeclared boot must not fit a pool smaller than the defaults");
+    assert!(
+        !r.passed(),
+        "an undeclared boot must not fit a pool smaller than the defaults"
+    );
     r.outcome
         .chunk_error
         .clone()

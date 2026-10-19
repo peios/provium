@@ -93,7 +93,11 @@ mod tests {
             args: [7, 0xC0104B00, 0, 0, 0, 0],
             bufs: vec![vec![0u8; 16], vec![0u8; 64]],
             ptrs: vec![2],
-            nested: vec![NestedPtr { parent: 0, child: 1, offset: 8 }],
+            nested: vec![NestedPtr {
+                parent: 0,
+                child: 1,
+                offset: 8,
+            }],
         };
         let bytes = rmp_serde::to_vec_named(&a).unwrap();
         let back: SyscallArgs = rmp_serde::from_slice(&bytes).unwrap();

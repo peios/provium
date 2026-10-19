@@ -31,9 +31,8 @@ use thiserror::Error;
 use provium_protocol::wire::{
     CloseArgs, DirEntry, ExecArgs, ExecResult, ExitStatus, IoctlArgs, IoctlOk, KillArgs,
     ListdirArgs, MkdirArgs, OpResult, OpenFileArgs, OpenMode, ReadArgs, ReadFileArgs, ReadMemArgs,
-    ReadMemResult, RenameArgs,
-    RunAsyncArgs, SeekArgs, SeekWhence, StatArgs, TailFileArgs, TailStart, UnlinkArgs, WaitArgs,
-    WriteArgs, WriteFileArgs, WriteFileMode,
+    ReadMemResult, RenameArgs, RunAsyncArgs, SeekArgs, SeekWhence, StatArgs, TailFileArgs,
+    TailStart, UnlinkArgs, WaitArgs, WriteArgs, WriteFileArgs, WriteFileMode,
 };
 use provium_protocol::OsError;
 
@@ -429,9 +428,7 @@ pub struct StreamGuard {
 
 impl std::fmt::Debug for StreamGuard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamGuard")
-            .field("id", &self.id)
-            .finish()
+        f.debug_struct("StreamGuard").field("id", &self.id).finish()
     }
 }
 
@@ -474,10 +471,7 @@ impl VmTailSession {
     /// Set a per-call read timeout on the underlying stream.
     /// Best-effort — backends that don't support it return
     /// `NotSupported`.
-    pub fn set_read_timeout(
-        &self,
-        timeout: Option<std::time::Duration>,
-    ) -> std::io::Result<()> {
+    pub fn set_read_timeout(&self, timeout: Option<std::time::Duration>) -> std::io::Result<()> {
         self.inner.set_read_timeout(timeout)
     }
 }
@@ -498,10 +492,7 @@ impl std::fmt::Debug for Vm {
             .field("name", &self.name)
             .field("profile", &self.profile_name)
             .field("state", &inner.state)
-            .field(
-                "cid",
-                &inner.running.as_ref().map(|r| r.cid).unwrap_or(0),
-            )
+            .field("cid", &inner.running.as_ref().map(|r| r.cid).unwrap_or(0))
             .finish()
     }
 }
@@ -581,7 +572,7 @@ impl Vm {
             }),
             bridge_attachments: std::collections::BTreeMap::new(),
             disks: std::collections::BTreeMap::new(),
-                boot_overrides: None,
+            boot_overrides: None,
             boot_reservation: None,
             disk_dir: None,
         };
@@ -730,7 +721,12 @@ impl Vm {
     /// Look up an attached bridge by name. Returns `None` if no
     /// bridge with that name has been recorded.
     pub fn bridge_for(&self, name: &str) -> Option<crate::bridge::Bridge> {
-        self.inner.lock().unwrap().bridge_attachments.get(name).cloned()
+        self.inner
+            .lock()
+            .unwrap()
+            .bridge_attachments
+            .get(name)
+            .cloned()
     }
 
     /// Record a disk attachment under `id`. Used by `vm:attach_disk`.
@@ -787,7 +783,8 @@ impl Vm {
         };
         match source {
             CreatedDisk::Blank { size } => {
-                let file = std::fs::File::create(&path).map_err(|e| fail(e, "creating the image"))?;
+                let file =
+                    std::fs::File::create(&path).map_err(|e| fail(e, "creating the image"))?;
                 file.set_len(size)
                     .map_err(|e| fail(e, "sizing the image"))?;
             }
@@ -796,9 +793,8 @@ impl Vm {
                 // fixture shared by every VM that names it, and a guest
                 // writing through to it would corrupt the next test's
                 // starting state.
-                std::fs::copy(&from, &path).map_err(|e| {
-                    fail(e, &format!("copying the template `{}`", from.display()))
-                })?;
+                std::fs::copy(&from, &path)
+                    .map_err(|e| fail(e, &format!("copying the template `{}`", from.display())))?;
             }
         }
         Ok(path)
@@ -1085,10 +1081,12 @@ impl Vm {
                 None => return Ok(Vec::new()),
             }
         };
-        std::fs::read(&path).map_err(|e| VmError::Os(provium_protocol::OsError {
-            errno: e.raw_os_error().unwrap_or(0),
-            message: e.to_string(),
-        }))
+        std::fs::read(&path).map_err(|e| {
+            VmError::Os(provium_protocol::OsError {
+                errno: e.raw_os_error().unwrap_or(0),
+                message: e.to_string(),
+            })
+        })
     }
 
     /// Path of the QEMU chardev console socket, if the VMM
@@ -1123,7 +1121,11 @@ impl Vm {
     ) -> Result<usize, VmError> {
         let path = {
             let inner = self.inner.lock().unwrap();
-            match inner.running.as_ref().and_then(|r| r.console_socket.clone()) {
+            match inner
+                .running
+                .as_ref()
+                .and_then(|r| r.console_socket.clone())
+            {
                 Some(p) => p,
                 None => {
                     return Err(VmError::Os(provium_protocol::OsError {
@@ -1198,11 +1200,7 @@ impl Vm {
     }
 
     /// Rename a path.
-    pub fn rename(
-        &self,
-        from: impl Into<String>,
-        to: impl Into<String>,
-    ) -> Result<(), VmError> {
+    pub fn rename(&self, from: impl Into<String>, to: impl Into<String>) -> Result<(), VmError> {
         self.with_client("rename", |client| {
             match client.rename(RenameArgs {
                 from: from.into(),
@@ -1284,7 +1282,10 @@ impl Vm {
         if inner.state != VmState::Booted {
             return Err(self.wrong_state(inner.state, "reset"));
         }
-        let res = inner.running.as_ref().ok_or_else(|| self.wrong_state(inner.state, "reset"))?;
+        let res = inner
+            .running
+            .as_ref()
+            .ok_or_else(|| self.wrong_state(inner.state, "reset"))?;
         let inst = res
             .instance
             .as_ref()
@@ -1331,12 +1332,10 @@ impl Vm {
                 Some(false) => {}
             }
             if Instant::now() >= deadline {
-                break Err(VmError::Client(ClientError::Connect(
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "guest did not serve its agent again after a reset",
-                    ),
-                )));
+                break Err(VmError::Client(ClientError::Connect(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "guest did not serve its agent again after a reset",
+                ))));
             }
             std::thread::sleep(RESET_AGENT_RETRY);
         };
@@ -1370,7 +1369,10 @@ impl Vm {
         if inner.state != VmState::Booted {
             return Err(self.wrong_state(inner.state, "wakeup"));
         }
-        let res = inner.running.as_ref().ok_or_else(|| self.wrong_state(inner.state, "wakeup"))?;
+        let res = inner
+            .running
+            .as_ref()
+            .ok_or_else(|| self.wrong_state(inner.state, "wakeup"))?;
         let inst = res
             .instance
             .as_ref()
@@ -1390,7 +1392,10 @@ impl Vm {
         if inner.state != VmState::Booted {
             return Err(self.wrong_state(inner.state, "is_suspended"));
         }
-        let res = inner.running.as_ref().ok_or_else(|| self.wrong_state(inner.state, "is_suspended"))?;
+        let res = inner
+            .running
+            .as_ref()
+            .ok_or_else(|| self.wrong_state(inner.state, "is_suspended"))?;
         let inst = res
             .instance
             .as_ref()
@@ -1412,7 +1417,10 @@ impl Vm {
         if inner.state != VmState::Booted {
             return Err(self.wrong_state(inner.state, "power_button"));
         }
-        let res = inner.running.as_ref().ok_or_else(|| self.wrong_state(inner.state, "power_button"))?;
+        let res = inner
+            .running
+            .as_ref()
+            .ok_or_else(|| self.wrong_state(inner.state, "power_button"))?;
         let inst = res
             .instance
             .as_ref()
@@ -1436,9 +1444,8 @@ impl Vm {
             OpResult::Ok(h) => Ok(h),
             OpResult::Err(e) => Err(VmError::Os(e)),
         })?;
-        let open_files = std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::BTreeSet::new(),
-        ));
+        let open_files =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
         let drop_guard = std::sync::Arc::new(WorkerDropGuard {
             handle,
             vm: self.clone(),
@@ -1517,7 +1524,13 @@ impl Vm {
     ) -> Result<PendingSyscall, VmError> {
         self.with_client("syscall_async", |client| {
             client
-                .begin_syscall(provium_protocol::wire::SyscallArgs { nr, args, bufs, ptrs, nested })
+                .begin_syscall(provium_protocol::wire::SyscallArgs {
+                    nr,
+                    args,
+                    bufs,
+                    ptrs,
+                    nested,
+                })
                 .map_err(VmError::Client)
         })
     }
@@ -1558,10 +1571,7 @@ impl Vm {
     /// [`VmTailSession`] with a fresh registry guard. Used by
     /// `proc:stdout_stream`, `vm:fd_stream`, `bridge:capture`, and
     /// any future stream that opens off the agent.
-    pub fn wrap_tail_session(
-        &self,
-        inner: crate::agent_client::TailFileSession,
-    ) -> VmTailSession {
+    pub fn wrap_tail_session(&self, inner: crate::agent_client::TailFileSession) -> VmTailSession {
         self.wrap_tail_session_with_meta(
             inner,
             StreamMeta {
@@ -1581,16 +1591,15 @@ impl Vm {
         meta: StreamMeta,
     ) -> VmTailSession {
         let id = STREAM_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-        self.resources
-            .lock()
-            .unwrap()
-            .open_streams
-            .insert(id, meta);
+        self.resources.lock().unwrap().open_streams.insert(id, meta);
         let guard = StreamGuard {
             id,
             registry: Arc::downgrade(&self.resources),
         };
-        VmTailSession { inner, _guard: guard }
+        VmTailSession {
+            inner,
+            _guard: guard,
+        }
     }
 
     /// Register a console-stream session in this VM's resource
@@ -1601,11 +1610,7 @@ impl Vm {
     /// tail-file session is. Used by `console:read()`.
     pub fn register_console_stream(&self, meta: StreamMeta) -> StreamGuard {
         let id = STREAM_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-        self.resources
-            .lock()
-            .unwrap()
-            .open_streams
-            .insert(id, meta);
+        self.resources.lock().unwrap().open_streams.insert(id, meta);
         StreamGuard {
             id,
             registry: Arc::downgrade(&self.resources),
@@ -1795,9 +1800,10 @@ impl Vm {
             VmState::Booted | VmState::Paused => {}
             other => return Err(self.wrong_state(other, "detach_disk")),
         }
-        let res = inner.running.as_ref().ok_or_else(|| {
-            self.wrong_state(inner.state, "detach_disk")
-        })?;
+        let res = inner
+            .running
+            .as_ref()
+            .ok_or_else(|| self.wrong_state(inner.state, "detach_disk"))?;
         let r = res
             .instance
             .as_ref()
@@ -1875,15 +1881,15 @@ impl Vm {
         if let Ok(meta) = self.stat(path.clone()) {
             if meta.size > READ_FILE_MAX_BYTES {
                 return Err(VmError::Os(provium_protocol::OsError {
-                errno: 27, // EFBIG
-                message: format!(
-                    "vm:read_file `{}`: {} bytes exceeds {} MiB limit \
+                    errno: 27, // EFBIG
+                    message: format!(
+                        "vm:read_file `{}`: {} bytes exceeds {} MiB limit \
                      — use vm:tail_file or vm:open_file for chunked reads",
-                    path,
-                    meta.size,
-                    READ_FILE_MAX_BYTES / (1024 * 1024),
-                ),
-            }));
+                        path,
+                        meta.size,
+                        READ_FILE_MAX_BYTES / (1024 * 1024),
+                    ),
+                }));
             }
         }
         self.with_client("read_file", |client| {
@@ -1995,10 +2001,7 @@ impl Vm {
     /// agent-side close fails (e.g. VM dead) — so the snapshot
     /// precondition doesn't keep treating a closed FileUd as an
     /// open file forever. Mirrors the StreamGuard drop semantics.
-    pub fn close(
-        &self,
-        handle: provium_protocol::handle::FileHandle,
-    ) -> Result<(), VmError> {
+    pub fn close(&self, handle: provium_protocol::handle::FileHandle) -> Result<(), VmError> {
         let close_result = self.with_client("close", |client| {
             match client.close(CloseArgs { handle })? {
                 OpResult::Ok(()) => Ok(()),
@@ -2016,11 +2019,9 @@ impl Vm {
 
     /// Read the guest wall clock (nanoseconds since Unix epoch).
     pub fn clock_get(&self) -> Result<i64, VmError> {
-        self.with_client("get_time", |client| {
-            match client.get_time()? {
-                OpResult::Ok(t) => Ok(t.ns),
-                OpResult::Err(e) => Err(VmError::Os(e)),
-            }
+        self.with_client("get_time", |client| match client.get_time()? {
+            OpResult::Ok(t) => Ok(t.ns),
+            OpResult::Err(e) => Err(VmError::Os(e)),
         })
     }
 
@@ -2311,13 +2312,7 @@ pub(crate) struct WorkerDropGuard {
 
 impl Drop for WorkerDropGuard {
     fn drop(&mut self) {
-        let drained: Vec<u64> = self
-            .open_files
-            .lock()
-            .unwrap()
-            .iter()
-            .copied()
-            .collect();
+        let drained: Vec<u64> = self.open_files.lock().unwrap().iter().copied().collect();
         if drained.is_empty() {
             return;
         }
@@ -2382,13 +2377,7 @@ impl Worker {
         // Deregister regardless of agent outcome — even on a
         // worker-side join error, the worker is gone and its
         // file handles are unreachable.
-        let drained: Vec<u64> = self
-            .open_files
-            .lock()
-            .unwrap()
-            .iter()
-            .copied()
-            .collect();
+        let drained: Vec<u64> = self.open_files.lock().unwrap().iter().copied().collect();
         if !drained.is_empty() {
             let mut reg = self.vm.resources.lock().unwrap();
             for h in &drained {
@@ -2477,11 +2466,7 @@ impl Worker {
 
     /// Issue a raw syscall under the worker. Up to 6 i64 args are
     /// forwarded; the rest are zero-padded.
-    pub fn syscall(
-        &self,
-        nr: i64,
-        args: Vec<i64>,
-    ) -> Result<crate::vm::SyscallResult, VmError> {
+    pub fn syscall(&self, nr: i64, args: Vec<i64>) -> Result<crate::vm::SyscallResult, VmError> {
         let mut padded = [0i64; 6];
         for (slot, value) in padded.iter_mut().zip(args.into_iter().take(6)) {
             *slot = value;
@@ -2731,10 +2716,7 @@ impl Process {
     /// Wait with an optional millisecond timeout. On timeout the
     /// agent SIGKILLs the child and the [`RunResult`] reports
     /// [`ExitStatus::TimedOut`].
-    pub fn wait_with_timeout(
-        &self,
-        timeout_ms: Option<u64>,
-    ) -> Result<RunResult, VmError> {
+    pub fn wait_with_timeout(&self, timeout_ms: Option<u64>) -> Result<RunResult, VmError> {
         // Pre-check: a previous `wait` (or the drop guard) marked
         // the process as consumed. The agent has already
         // released the slot — calling wire-level wait again

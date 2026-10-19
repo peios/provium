@@ -25,8 +25,10 @@ fn unknown_profile_includes_name() {
     let e = LabError::UnknownProfile("missing".into());
     let s = e.to_string();
     assert!(s.contains("missing"));
-    assert!(s.contains("provium.toml"),
-        "error must point at provium.toml: {s}");
+    assert!(
+        s.contains("provium.toml"),
+        "error must point at provium.toml: {s}"
+    );
 }
 
 #[test]
@@ -55,8 +57,10 @@ fn restore_failed_carries_vm_and_reason() {
 fn claim_already_held_says_one_shot() {
     let e = LabError::ClaimAlreadyHeld;
     let s = e.to_string();
-    assert!(s.contains("one-shot"),
-        "ClaimAlreadyHeld must mention one-shot: {s}");
+    assert!(
+        s.contains("one-shot"),
+        "ClaimAlreadyHeld must mention one-shot: {s}"
+    );
 }
 
 #[test]

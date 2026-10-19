@@ -1,28 +1,13 @@
-//! # provium-host
+//! Host-side VM test runner: Lua bindings, scheduling, profiles, fixture caches,
+//! and agent connections. The `provium` CLI lives in `src/bin/provium.rs`.
 //!
-//! Host-side core for provium. This crate is the home of the
-//! scheduler, the VM resource model, the agent client, and (in a
-//! future slice) the mlua bindings + test runner. It is consumed by
-//! the `provium` binary in the same crate's `src/main.rs`.
+//! [`vmm::qemu::QemuVmm`] controls real guest machines through QMP and vsock.
+//! With the `local-agent` feature, [`vmm::local_agent::LocalAgentVmm`] runs
+//! agent operations in the host process for unprivileged library tests.
+//! The local backend does not provide guest isolation or VM lifecycle coverage.
 //!
-//! ## Slice 1 scope (this crate at v0.1)
-//!
-//! Foundational pieces, no scheduler or test runner yet:
-//!
-//! * [`profile`] — TOML loading of the `[profiles.<name>]` table.
-//! * [`cid`] — monotonic vsock CID allocator.
-//! * [`connector`] — abstraction over the agent connection: vsock in
-//!   production, paired Unix streams in tests.
-//! * [`agent_client`] — typed wrappers for every short op + a
-//!   streaming `tail_file` client.
-//! * [`vmm`] — the [`vmm::Vmm`] trait per `DESIGN.md` Architecture §;
-//!   `vmm::qemu::QemuVmm` is the production implementation and
-//!   `vmm::local_agent::LocalAgentVmm` the in-process one tests use.
-//!
-//! Tests live under `tests/` and drive the agent client against a
-//! real `provium-agent` running on the host (via `UnixStream::pair`),
-//! so the full host-↔-agent code path is exercised end-to-end without
-//! needing KVM or a guest kernel.
+//! The default `lua` and `local-agent` features provide the CLI and its tests.
+//! Consumers that only need the client and resource model can disable them.
 
 #![deny(missing_debug_implementations)]
 #![warn(missing_docs)]
@@ -34,8 +19,8 @@ pub mod bridge;
 pub mod bridge_realize;
 pub mod build;
 pub mod cid;
-pub mod console;
 pub mod connector;
+pub mod console;
 pub mod fixture;
 pub mod lab;
 pub mod nbd;

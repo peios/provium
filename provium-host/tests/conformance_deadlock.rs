@@ -127,10 +127,18 @@ fn an_unclaimed_hold_and_wait_cycle_is_refused_not_stalled() {
 
     for f in &outs {
         assert_eq!(f.outcome.chunk_error, None, "{}", f.path.display());
-        assert_eq!(f.timeout, FileTimeoutOutcome::InTime, "no watchdog should fire");
+        assert_eq!(
+            f.timeout,
+            FileTimeoutOutcome::InTime,
+            "no watchdog should fire"
+        );
     }
     let failed = failures(&outs);
-    assert_eq!(failed.len(), 1, "exactly one boot closes the cycle: {failed:?}");
+    assert_eq!(
+        failed.len(),
+        1,
+        "exactly one boot closes the cycle: {failed:?}"
+    );
     assert!(
         failed[0].contains("the pool is deadlocked") && failed[0].contains("provium:claim"),
         "the failure must name the deadlock and the remedy: {}",
@@ -165,7 +173,11 @@ fn a_claim_covers_the_files_boots_so_the_same_shape_passes() {
         assert_eq!(f.outcome.chunk_error, None, "{}", f.path.display());
         assert!(f.passed(), "{}: {:?}", f.path.display(), failures(&outs));
     }
-    assert_eq!(pool.available(), pool.total(), "every claim is released at file end");
+    assert_eq!(
+        pool.available(),
+        pool.total(),
+        "every claim is released at file end"
+    );
 }
 
 /// A boot the claim cannot cover fails at once, telling the author to

@@ -228,8 +228,7 @@ impl BarrierState {
                 return false;
             }
             let remaining = deadline - now;
-            let (new_g, wait_result) =
-                self.cond.wait_timeout(g, remaining).unwrap();
+            let (new_g, wait_result) = self.cond.wait_timeout(g, remaining).unwrap();
             g = new_g;
             if g.generation != my_generation {
                 return true;
@@ -464,9 +463,7 @@ impl Lab {
         // streams across the whole tree before touching the VMM.
         let total_streams = self.open_stream_total();
         if total_streams > 0 {
-            let mut detail = format!(
-                "lab:snapshot: {total_streams} stream(s) still open\n"
-            );
+            let mut detail = format!("lab:snapshot: {total_streams} stream(s) still open\n");
             for vm in self.vms() {
                 for meta in vm.open_streams_meta() {
                     detail.push_str("  - ");
@@ -501,9 +498,8 @@ impl Lab {
                 bar.wait();
                 let r = (|| -> Result<LabSnapshotEntry, LabError> {
                     vm.pause().ok(); // best-effort — already-paused is fine
-                    vm.snapshot(&snap_path).map_err(|e| {
-                        LabError::RestoreFailed(name.clone(), e.to_string())
-                    })?;
+                    vm.snapshot(&snap_path)
+                        .map_err(|e| LabError::RestoreFailed(name.clone(), e.to_string()))?;
                     let _ = vm.resume();
                     Ok(LabSnapshotEntry {
                         vm_name: name.clone(),
@@ -561,11 +557,7 @@ impl Lab {
                 let directional_impairments = b
                     .directional_pairs()
                     .into_iter()
-                    .filter(|(_, d)| {
-                        d.latency_ms > 0
-                            || d.drop_rate_pct > 0
-                            || d.bandwidth_bps > 0
-                    })
+                    .filter(|(_, d)| d.latency_ms > 0 || d.drop_rate_pct > 0 || d.bandwidth_bps > 0)
                     .map(|((from, to), d)| LabSnapshotDirectional {
                         from,
                         to,
@@ -672,12 +664,7 @@ impl Lab {
                 }
             }
             handles.push(std::thread::spawn(move || {
-                target.restore_vm(
-                    leaf_name,
-                    entry.profile.clone(),
-                    opts,
-                    &entry.snapshot_path,
-                )
+                target.restore_vm(leaf_name, entry.profile.clone(), opts, &entry.snapshot_path)
             }));
         }
         let mut restored_vms: Vec<Vm> = Vec::with_capacity(meta.vms.len());
@@ -813,10 +800,7 @@ impl Lab {
     /// Insert an existing [`crate::bridge::Bridge`] under this lab.
     /// Mirrors [`Self::include_vm`] for the bridge resource kind so
     /// `lab:include(my_bridge)` works per `DESIGN.md` § Lab.
-    pub fn include_bridge(
-        &self,
-        bridge: crate::bridge::Bridge,
-    ) -> Result<(), LabError> {
+    pub fn include_bridge(&self, bridge: crate::bridge::Bridge) -> Result<(), LabError> {
         let name = bridge.name().to_owned();
         check_reserved_name(&name)?;
         let mut inner = self.inner.lock().unwrap();
@@ -843,9 +827,7 @@ impl Lab {
             // "vm name X" which is still misleading but matches
             // the lab's existing naming-conflict surface. Worth a
             // dedicated variant if/when more sub-lab errors appear.
-            return Err(LabError::DuplicateVmName(format!(
-                "sub-lab `{name}`"
-            )));
+            return Err(LabError::DuplicateVmName(format!("sub-lab `{name}`")));
         }
         inner.sub_labs.insert(name, sub);
         Ok(())
@@ -910,9 +892,7 @@ impl Lab {
         }
         let reservation = match self.account.owner() {
             Some(owner) => pool.acquire_for(owner, amount).map_err(|e| match e {
-                crate::scheduler::AcquireError::ExceedsTotal { .. } => {
-                    LabError::ClaimExceedsBudget
-                }
+                crate::scheduler::AcquireError::ExceedsTotal { .. } => LabError::ClaimExceedsBudget,
                 deadlock @ crate::scheduler::AcquireError::Deadlock(_) => {
                     LabError::ClaimRefused(deadlock.to_string())
                 }
@@ -1108,8 +1088,7 @@ impl Lab {
         // tail-stream registry but DESIGN.md § Streams says a
         // pending capture must block snapshots like any other
         // stream.
-        let from_captures: usize =
-            inner.bridges.values().map(|b| b.active_captures()).sum();
+        let from_captures: usize = inner.bridges.values().map(|b| b.active_captures()).sum();
         let from_subs: usize = inner.sub_labs.values().map(Lab::open_stream_total).sum();
         from_vms + from_captures + from_subs
     }
@@ -1161,7 +1140,13 @@ impl Lab {
 
     /// Snapshot of the names of every direct-child sub-lab.
     pub fn sub_lab_names(&self) -> Vec<String> {
-        self.inner.lock().unwrap().sub_labs.keys().cloned().collect()
+        self.inner
+            .lock()
+            .unwrap()
+            .sub_labs
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Look up a sub-lab by name. Used by `lab.<name>` dot
@@ -1221,8 +1206,7 @@ impl Lab {
                 // running with a vCPU and 512 MiB (PEI-1111).
                 let (memory_bytes, cpus) = vm.boot_opts_summary().sizing();
                 let per_vm_mem = memory_bytes.saturating_add(crate::vm::VMM_OVERHEAD_BYTES);
-                needed.memory_bytes =
-                    needed.memory_bytes.saturating_add(per_vm_mem);
+                needed.memory_bytes = needed.memory_bytes.saturating_add(per_vm_mem);
                 needed.cpus = needed.cpus.saturating_add(cpus);
             }
         }
@@ -1323,8 +1307,7 @@ impl Lab {
                     failures.insert(name, e.to_string());
                 }
                 Err(_) => {
-                    failures
-                        .insert("<panicked>".into(), "thread panicked".into());
+                    failures.insert("<panicked>".into(), "thread panicked".into());
                 }
             }
         }
@@ -1387,8 +1370,7 @@ impl Lab {
 /// Lab dot-access. Using any of these as a VM / bridge / sub-lab
 /// name would silently shadow the corresponding helper method
 /// when looked up via `lab.<name>`.
-const RESERVED_LAB_NAMES: &[&str] =
-    &["vm_fixture", "lab_fixture", "pack", "unpack"];
+const RESERVED_LAB_NAMES: &[&str] = &["vm_fixture", "lab_fixture", "pack", "unpack"];
 
 fn check_reserved_name(name: &str) -> Result<(), LabError> {
     if RESERVED_LAB_NAMES.contains(&name) {
@@ -1461,14 +1443,14 @@ mod tests {
                 root: None,
                 cmdline: "console=hvc0".into(),
                 guest_os: "peios".into(),
-            inject_agent: true,
-            agent_overlay_path: None,
-            agent_boot_timeout: None,
-            disks: Vec::new(),
-            cmdline_file: None,
-            build: None,
-            build_out: None,
-            dir: None,
+                inject_agent: true,
+                agent_overlay_path: None,
+                agent_boot_timeout: None,
+                disks: Vec::new(),
+                cmdline_file: None,
+                build: None,
+                build_out: None,
+                dir: None,
             },
         );
         let config = Arc::new(Config {
@@ -1481,9 +1463,7 @@ mod tests {
     #[test]
     fn create_then_lookup_returns_same_vm() {
         let lab = lab_with("peios");
-        let created = lab
-            .create_vm("dc1", "peios", BootOpts::default())
-            .unwrap();
+        let created = lab.create_vm("dc1", "peios", BootOpts::default()).unwrap();
         let looked = lab.get_vm("dc1").unwrap();
         assert_eq!(created.name(), looked.name());
     }
@@ -1580,7 +1560,8 @@ mod tests {
     fn vm_names_lists_in_lex_order() {
         let lab = lab_with("peios");
         lab.create_vm("zeta", "peios", BootOpts::default()).unwrap();
-        lab.create_vm("alpha", "peios", BootOpts::default()).unwrap();
+        lab.create_vm("alpha", "peios", BootOpts::default())
+            .unwrap();
         assert_eq!(lab.vm_names(), vec!["alpha", "zeta"]);
     }
 
@@ -1589,7 +1570,8 @@ mod tests {
         let lab = lab_with("peios");
         lab.create_vm("top", "peios", BootOpts::default()).unwrap();
         let sub = lab.sub_lab("inner");
-        sub.create_vm("nested", "peios", BootOpts::default()).unwrap();
+        sub.create_vm("nested", "peios", BootOpts::default())
+            .unwrap();
 
         let collected = lab.collect_all_vms();
         let names: Vec<String> = collected.iter().map(|(n, _)| n.clone()).collect();

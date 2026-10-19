@@ -20,7 +20,11 @@ pub(crate) struct NicUd {
 
 impl NicUd {
     pub(crate) fn new(bridge: Bridge, vm_name: String) -> Self {
-        Self { bridge, vm_name, vm: None }
+        Self {
+            bridge,
+            vm_name,
+            vm: None,
+        }
     }
 
     /// Builder variant carrying the parent VM so link-state ops
@@ -39,10 +43,8 @@ impl UserData for NicUd {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("counters", |lua, this, ()| {
             let table = lua.create_table()?;
-            let tap = crate::bridge_realize::tap_name_for_vm_on_bridge(
-                &this.vm_name,
-                this.bridge.name(),
-            );
+            let tap =
+                crate::bridge_realize::tap_name_for_vm_on_bridge(&this.vm_name, this.bridge.name());
             let read_stat = |key: &str| -> u64 {
                 let path = format!("/sys/class/net/{tap}/statistics/{key}");
                 std::fs::read_to_string(&path)
@@ -82,21 +84,16 @@ impl UserData for NicUd {
                     this.bridge.name(),
                 )));
             }
-            let tap = crate::bridge_realize::tap_name_for_vm_on_bridge(
-                &this.vm_name,
-                this.bridge.name(),
-            );
+            let tap =
+                crate::bridge_realize::tap_name_for_vm_on_bridge(&this.vm_name, this.bridge.name());
             let site = super::result_ud::capture_creation_site(lua);
             // tcpdump on the per-VM tap interface (not the whole
             // bridge) so the test author gets per-NIC traffic.
             // Capture-counter is still pinned to the bridge so the
             // snapshot precondition has a single rollup point.
-            let stream = super::capture_ud::CaptureUd::spawn_on_iface_with_guard(
-                &tap,
-                &this.bridge,
-                site,
-            )
-            .map_err(|e| mlua::Error::external(format!("nic capture: {e} ({tap})")))?;
+            let stream =
+                super::capture_ud::CaptureUd::spawn_on_iface_with_guard(&tap, &this.bridge, site)
+                    .map_err(|e| mlua::Error::external(format!("nic capture: {e} ({tap})")))?;
             super::result_ud::register_resource(lua, stream, "stream")
         });
 
@@ -135,8 +132,6 @@ impl UserData for NicUd {
             Ok(())
         });
         methods.add_method("vm_name", |_, this, ()| Ok(this.vm_name.clone()));
-        methods.add_method("bridge", |_, this, ()| {
-            Ok(this.bridge.name().to_owned())
-        });
+        methods.add_method("bridge", |_, this, ()| Ok(this.bridge.name().to_owned()));
     }
 }

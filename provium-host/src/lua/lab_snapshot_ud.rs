@@ -19,9 +19,7 @@ pub(crate) struct LabSnapshotUd {
 
 impl UserData for LabSnapshotUd {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("path", |_, this, ()| {
-            Ok(this.dir.display().to_string())
-        });
+        methods.add_method("path", |_, this, ()| Ok(this.dir.display().to_string()));
         methods.add_method("size", |_, this, ()| {
             let mut total: u64 = 0;
             if let Ok(rd) = std::fs::read_dir(&this.dir) {

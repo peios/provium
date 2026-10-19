@@ -25,13 +25,16 @@ fn no_files_plain_output_is_human_readable() {
     std::fs::write(&cfg, "").unwrap();
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
+        .arg("--config")
+        .arg(&cfg)
         .arg(dir.path())
         .output()
         .expect("spawn provium");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("no *.test.lua files found"),
-        "expected human notice, got `{stdout}`");
+    assert!(
+        stdout.contains("no *.test.lua files found"),
+        "expected human notice, got `{stdout}`"
+    );
     // Empty result is success.
     assert!(out.status.success());
 }
@@ -46,16 +49,21 @@ fn no_files_json_emits_json_object() {
     std::fs::write(&cfg, "").unwrap();
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
+        .arg("--config")
+        .arg(&cfg)
         .arg("--json")
         .arg(dir.path())
         .output()
         .expect("spawn provium");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.trim_start().starts_with('{'),
-        "--json on empty must emit JSON object, got `{stdout}`");
-    assert!(stdout.contains("no_files"),
-        "type field must be 'no_files', got `{stdout}`");
+    assert!(
+        stdout.trim_start().starts_with('{'),
+        "--json on empty must emit JSON object, got `{stdout}`"
+    );
+    assert!(
+        stdout.contains("no_files"),
+        "type field must be 'no_files', got `{stdout}`"
+    );
 }
 
 #[test]
@@ -70,17 +78,22 @@ fn rerun_failed_without_state_file_exits_clean_with_notice() {
     let out = Command::new(provium_bin())
         .env("PROVIUM_RERUN_STATE", &state)
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
+        .arg("--config")
+        .arg(&cfg)
         .arg("--rerun-failed")
         .arg(dir.path())
         .output()
         .expect("spawn provium");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("no prior failure state")
-        || stderr.contains("nothing to re-run"),
-        "stderr must explain why nothing ran, got `{stderr}`");
-    assert!(out.status.success(),
-        "exit must be clean (no failures), got {:?}", out.status);
+    assert!(
+        stderr.contains("no prior failure state") || stderr.contains("nothing to re-run"),
+        "stderr must explain why nothing ran, got `{stderr}`"
+    );
+    assert!(
+        out.status.success(),
+        "exit must be clean (no failures), got {:?}",
+        out.status
+    );
 }
 
 #[test]
@@ -96,7 +109,8 @@ fn coverage_without_provium_coverage_fails_with_pointer() {
     let out = Command::new(provium_bin())
         .env("PATH", "/no/such/path")
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
+        .arg("--config")
+        .arg(&cfg)
         .arg("--coverage")
         .arg(&test_file)
         .output()
@@ -123,8 +137,10 @@ fn help_includes_top_level_flags() {
     // Must mention every top-level flag tooling consumers might
     // grep for.
     for flag in &["--json", "--watch", "--coverage", "--filter"] {
-        assert!(stdout.contains(flag),
-            "--help must mention {flag}, got `{stdout}`");
+        assert!(
+            stdout.contains(flag),
+            "--help must mention {flag}, got `{stdout}`"
+        );
     }
 }
 

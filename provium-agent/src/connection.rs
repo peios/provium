@@ -8,9 +8,7 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
-use provium_protocol::wire::{
-    AgentInfo, AgentMessage, HelloErr, HelloOk, HostMessage,
-};
+use provium_protocol::wire::{AgentInfo, AgentMessage, HelloErr, HelloOk, HostMessage};
 use provium_protocol::PROTOCOL_VERSION;
 
 use crate::error::AgentRuntimeError;
@@ -59,9 +57,9 @@ where
     let hello = match first {
         HostMessage::Hello(h) => h,
         other => {
-            return Err(AgentRuntimeError::Protocol(
-                describe_handshake_violation(&other),
-            ));
+            return Err(AgentRuntimeError::Protocol(describe_handshake_violation(
+                &other,
+            )));
         }
     };
 
@@ -158,7 +156,10 @@ pub fn serve_worker_child(stream: UnixStream) -> Result<(), AgentRuntimeError> {
                 }),
                 None => AgentMessage::AgentError(provium_protocol::wire::AgentError {
                     kind: provium_protocol::wire::AgentErrorKind::UnknownHandle,
-                    message: format!("worker_syscall_await: unknown async handle {}", args.async_id),
+                    message: format!(
+                        "worker_syscall_await: unknown async handle {}",
+                        args.async_id
+                    ),
                 }),
             },
             other => dispatch_short(other, &state),
@@ -201,9 +202,7 @@ where
             for item in args.items {
                 responses.push(dispatch_short(item, state));
             }
-            AgentMessage::BatchOpResult(
-                provium_protocol::wire::ops::BatchOpResult { responses },
-            )
+            AgentMessage::BatchOpResult(provium_protocol::wire::ops::BatchOpResult { responses })
         }
 
         other => dispatch_short(other, state),
@@ -271,9 +270,7 @@ fn dispatch_short(op: HostMessage, state: &Arc<AgentState>) -> AgentMessage {
             for item in args.items {
                 results.push(ops::exec::run(item));
             }
-            AgentMessage::BatchExecResult(
-                provium_protocol::wire::ops::BatchExecResult { results },
-            )
+            AgentMessage::BatchExecResult(provium_protocol::wire::ops::BatchExecResult { results })
         }
     }
 }
@@ -312,7 +309,10 @@ fn target_os() -> &'static str {
 fn kernel_release() -> Option<String> {
     // Best-effort `uname -r`. Failures here are not fatal — the field
     // is only diagnostic.
-    let output = std::process::Command::new("uname").arg("-r").output().ok()?;
+    let output = std::process::Command::new("uname")
+        .arg("-r")
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }

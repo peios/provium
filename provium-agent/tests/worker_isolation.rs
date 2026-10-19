@@ -18,7 +18,8 @@ use std::process::{Child, Command, Stdio};
 use provium_protocol::frame::{read_frame, write_frame, DEFAULT_MAX_FRAME_BYTES};
 use provium_protocol::handle::WorkerHandle;
 use provium_protocol::wire::{
-    AgentMessage, HostMessage, OpResult, SyscallArgs, WorkerSyscallAwaitArgs, WorkerSyscallBeginArgs,
+    AgentMessage, HostMessage, OpResult, SyscallArgs, WorkerSyscallAwaitArgs,
+    WorkerSyscallBeginArgs,
 };
 
 // x86_64 syscall numbers — this test is gated to that arch below.
@@ -191,7 +192,10 @@ fn worker_async_syscall_begins_and_awaits_in_the_worker_process() {
     write_frame(&mut control, &bogus, DEFAULT_MAX_FRAME_BYTES).expect("write bogus await");
     match read_frame(&mut control, DEFAULT_MAX_FRAME_BYTES).expect("read bogus reply") {
         AgentMessage::AgentError(_) => {}
-        other => panic!("expected AgentError for unknown handle, got {}", other.kind()),
+        other => panic!(
+            "expected AgentError for unknown handle, got {}",
+            other.kind()
+        ),
     }
 
     drop(control);
@@ -255,7 +259,12 @@ fn worker_run_async_spawns_a_grandchild_the_parent_ops_can_drive() {
     assert_ne!(pid, std::process::id(), "nor this process");
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("grandchild /proc stat");
     let after_comm = stat.rsplit(')').next().unwrap();
-    let ppid: u32 = after_comm.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let ppid: u32 = after_comm
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
     assert_eq!(ppid, worker_pid, "the grandchild's parent is the worker");
 
     match process::proc_status(ProcStatusArgs { handle: outer }, &state) {
@@ -286,7 +295,10 @@ fn worker_run_async_spawns_a_grandchild_the_parent_ops_can_drive() {
         other => panic!("wait: {other:?}"),
     };
     assert_eq!(ok.status, ExitStatus::Signalled(libc::SIGTERM));
-    assert!(state.worker_process(outer).is_none(), "wait consumed the mapping");
+    assert!(
+        state.worker_process(outer).is_none(),
+        "wait consumed the mapping"
+    );
 
     // A wait that runs out of time kills the grandchild and reports it
     // as the parent table would: TimedOut, and the process is gone.

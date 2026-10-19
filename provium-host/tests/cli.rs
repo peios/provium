@@ -117,7 +117,10 @@ fn filter_narrows_discovered_files() {
     assert!(output.status.success(), "exit: {:?}", output.status);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("alpha.test.lua"));
-    assert!(!stdout.contains("beta.test.lua"), "beta should be filtered out: {stdout}");
+    assert!(
+        !stdout.contains("beta.test.lua"),
+        "beta should be filtered out: {stdout}"
+    );
 }
 
 #[test]
@@ -176,9 +179,9 @@ fn fail_fast_stops_after_first_failed_file() {
 
 #[test]
 fn save_events_writes_msgpack_frames_consumable_by_coverage() {
-    use std::io::Cursor;
     use provium_protocol::events::{Event, EventFrame};
     use provium_protocol::frame::{read_frame, DEFAULT_MAX_FRAME_BYTES};
+    use std::io::Cursor;
 
     let dir = tempfile::tempdir().unwrap();
     write_minimal_config(dir.path());
@@ -281,7 +284,11 @@ fn console_print_command_emits_interactive_qemu_line() {
         .arg("peios")
         .output()
         .expect("spawn provium");
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("qemu-system-x86_64"), "stdout: {stdout}");
     assert!(stdout.contains("-kernel"), "stdout: {stdout}");
@@ -337,6 +344,9 @@ fn console_with_agent_wires_vsock_in_print_command() {
         .expect("spawn provium");
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("vhost-vsock-pci,guest-cid="), "stdout: {stdout}");
+        assert!(
+            stdout.contains("vhost-vsock-pci,guest-cid="),
+            "stdout: {stdout}"
+        );
     }
 }

@@ -69,7 +69,9 @@ mod tests {
 
     #[test]
     fn hello_round_trips() {
-        let h = Hello { protocol_version: 1 };
+        let h = Hello {
+            protocol_version: 1,
+        };
         let bytes = rmp_serde::to_vec_named(&h).unwrap();
         let decoded: Hello = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(h, decoded);

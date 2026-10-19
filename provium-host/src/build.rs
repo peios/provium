@@ -92,12 +92,10 @@ pub fn run_build(profile_name: &str, profile: &Profile) -> Result<(), BuildError
     if let Some(dir) = profile.build_dir() {
         command.current_dir(dir);
     }
-    let status = command
-        .status()
-        .map_err(|e| BuildError::Spawn {
-            profile: profile_name.to_string(),
-            source: e,
-        })?;
+    let status = command.status().map_err(|e| BuildError::Spawn {
+        profile: profile_name.to_string(),
+        source: e,
+    })?;
 
     if !status.success() {
         return Err(BuildError::Failed {
@@ -156,7 +154,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("peios");
         // The command can rely on {out} already existing.
-        let p = profile(Some("touch \"$PWD/marker\" && test -d ."), Some(out.clone()));
+        let p = profile(
+            Some("touch \"$PWD/marker\" && test -d ."),
+            Some(out.clone()),
+        );
         run_build("peios", &p).expect("command succeeds");
         assert!(out.exists(), "out_dir was created before the build ran");
     }
@@ -181,9 +182,7 @@ mod tests {
         // dynamic one runs, and a no-op static profile doesn't error.
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
-        config
-            .profiles
-            .insert("static".into(), profile(None, None));
+        config.profiles.insert("static".into(), profile(None, None));
         config.profiles.insert(
             "dynamic".into(),
             profile(Some("true"), Some(dir.path().join("dynamic"))),

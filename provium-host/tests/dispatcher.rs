@@ -26,7 +26,8 @@ fn slice2_config() -> Arc<Config> {
         "peios".into(),
         Profile {
             kernel: "/unused".into(),
-            initrd: "/unused".into(), root: None,
+            initrd: "/unused".into(),
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -35,7 +36,8 @@ fn slice2_config() -> Arc<Config> {
             disks: Vec::new(),
             cmdline_file: None,
             build: None,
-            build_out: None, dir: None,
+            build_out: None,
+            dir: None,
         },
     );
     Arc::new(Config {
@@ -121,9 +123,7 @@ fn dispatch_preserves_input_order() {
         paths.push(write_file(
             dir.path(),
             &format!("{i}.test.lua"),
-            &format!(
-                r#"test("tn", function(t) t:log("file{i}"); t:assert(true) end)"#
-            ),
+            &format!(r#"test("tn", function(t) t:log("file{i}"); t:assert(true) end)"#),
         ));
     }
     let results = dispatch(paths.clone());
@@ -228,11 +228,7 @@ fn per_file_overhead_exceeding_total_pool_is_caught_at_dispatch() {
     let vmm: Arc<dyn Vmm> = Arc::new(LocalAgentVmm::new());
     let results = dispatch_files(vec![path], pool, config, vmm, opts);
 
-    let chunk_error = results[0]
-        .outcome
-        .chunk_error
-        .as_deref()
-        .unwrap_or("");
+    let chunk_error = results[0].outcome.chunk_error.as_deref().unwrap_or("");
     assert!(chunk_error.contains("exceeds"));
 }
 

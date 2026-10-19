@@ -239,7 +239,10 @@ where
         }));
     }
 
-    handles.into_iter().map(|h| h.join().unwrap_or_else(panic_to_dispatched)).collect()
+    handles
+        .into_iter()
+        .map(|h| h.join().unwrap_or_else(panic_to_dispatched))
+        .collect()
 }
 
 fn run_one_file(
@@ -444,13 +447,12 @@ fn run_one_file(
             // vm:shutdown() in test code already emitted.
             use crate::VmState;
             if matches!(vm.state(), VmState::Booted | VmState::Paused) {
-                opts.events.emit(Event::VmShutdown(
-                    provium_protocol::events::VmShutdown {
+                opts.events
+                    .emit(Event::VmShutdown(provium_protocol::events::VmShutdown {
                         file: path.display().to_string(),
                         vm_name: vm_name.clone(),
                         duration_ns: 0,
-                    },
-                ));
+                    }));
             }
         }
     }

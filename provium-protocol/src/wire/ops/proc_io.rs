@@ -102,9 +102,13 @@ mod tests {
             data: vec![1, 2, 3],
         };
         assert_eq!(a, rt(&a));
-        let b = ProcStdinCloseArgs { handle: ProcessHandle::new(5) };
+        let b = ProcStdinCloseArgs {
+            handle: ProcessHandle::new(5),
+        };
         assert_eq!(b, rt(&b));
-        let c = ProcStatusArgs { handle: ProcessHandle::new(7) };
+        let c = ProcStatusArgs {
+            handle: ProcessHandle::new(7),
+        };
         assert_eq!(c, rt(&c));
         let s = ProcessLiveStatus::Running;
         assert_eq!(s, rt(&s));

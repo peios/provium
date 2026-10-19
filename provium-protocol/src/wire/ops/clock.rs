@@ -67,7 +67,9 @@ mod tests {
 
     #[test]
     fn time_round_trips() {
-        let t = ClockTime { ns: 1_700_000_000_000_000_000 };
+        let t = ClockTime {
+            ns: 1_700_000_000_000_000_000,
+        };
         assert_eq!(t, round_trip(&t));
     }
 

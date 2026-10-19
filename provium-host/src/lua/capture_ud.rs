@@ -119,16 +119,14 @@ impl CaptureUd {
 
 impl UserData for CaptureUd {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("creation_site", |lua, this, ()| {
-            match &this.creation_site {
-                Some((file, line)) => {
-                    let table = lua.create_table()?;
-                    table.set("file", file.clone())?;
-                    table.set("line", *line)?;
-                    Ok(mlua::Value::Table(table))
-                }
-                None => Ok(mlua::Value::Nil),
+        methods.add_method("creation_site", |lua, this, ()| match &this.creation_site {
+            Some((file, line)) => {
+                let table = lua.create_table()?;
+                table.set("file", file.clone())?;
+                table.set("line", *line)?;
+                Ok(mlua::Value::Table(table))
             }
+            None => Ok(mlua::Value::Nil),
         });
 
         methods.add_method("next", |lua, this, timeout: Option<mlua::Value>| {
@@ -157,7 +155,8 @@ impl UserData for CaptureUd {
             // blocking indefinitely.
             use std::os::fd::AsRawFd;
             let fd = stdout.as_raw_fd();
-            let timeout_ms = ((timeout_secs * 1000.0).ceil() as i64).clamp(0, i32::MAX as i64) as i32;
+            let timeout_ms =
+                ((timeout_secs * 1000.0).ceil() as i64).clamp(0, i32::MAX as i64) as i32;
             let mut pfd = libc::pollfd {
                 fd,
                 events: libc::POLLIN,
@@ -204,8 +203,8 @@ impl UserData for CaptureUd {
             |lua, this, (pattern, timeout): (mlua::String, Option<mlua::Value>)| {
                 let needle = pattern.as_bytes().to_vec();
                 let timeout_secs = super::result_ud::parse_duration(timeout, 10.0)?;
-                let deadline = std::time::Instant::now()
-                    + std::time::Duration::from_secs_f64(timeout_secs);
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs_f64(timeout_secs);
                 // Seed acc with any leftover bytes from a prior
                 // match so we don't drop them.
                 let mut acc = {
@@ -241,8 +240,7 @@ impl UserData for CaptureUd {
                             String::from_utf8_lossy(&needle)
                         )));
                     };
-                    let timeout_ms =
-                        (rem.as_millis() as i64).clamp(0, i32::MAX as i64) as i32;
+                    let timeout_ms = (rem.as_millis() as i64).clamp(0, i32::MAX as i64) as i32;
                     let mut pfd = libc::pollfd {
                         fd,
                         events: libc::POLLIN,
@@ -289,9 +287,7 @@ impl UserData for CaptureUd {
                             let mut g = this.inner.lock().unwrap();
                             g.pending = leftover;
                         }
-                        return lua
-                            .create_string(&acc)
-                            .map(mlua::Value::String);
+                        return lua.create_string(&acc).map(mlua::Value::String);
                     }
                 }
             },
@@ -303,8 +299,8 @@ impl UserData for CaptureUd {
             |_, this, (pattern, timeout): (mlua::String, Option<mlua::Value>)| {
                 let needle = pattern.as_bytes().to_vec();
                 let timeout_secs = super::result_ud::parse_duration(timeout, 10.0)?;
-                let deadline = std::time::Instant::now()
-                    + std::time::Duration::from_secs_f64(timeout_secs);
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs_f64(timeout_secs);
                 let mut acc = {
                     let mut g = this.inner.lock().unwrap();
                     std::mem::take(&mut g.pending)
@@ -338,8 +334,7 @@ impl UserData for CaptureUd {
                             String::from_utf8_lossy(&needle)
                         )));
                     };
-                    let timeout_ms =
-                        (rem.as_millis() as i64).clamp(0, i32::MAX as i64) as i32;
+                    let timeout_ms = (rem.as_millis() as i64).clamp(0, i32::MAX as i64) as i32;
                     let mut pfd = libc::pollfd {
                         fd,
                         events: libc::POLLIN,
@@ -440,8 +435,8 @@ impl UserData for CaptureUd {
                     let Some(remaining) = deadline.checked_duration_since(now) else {
                         break;
                     };
-                    let timeout_ms = (remaining.as_millis() as i64)
-                        .clamp(0, i32::MAX as i64) as i32;
+                    let timeout_ms =
+                        (remaining.as_millis() as i64).clamp(0, i32::MAX as i64) as i32;
                     let mut pfd = libc::pollfd {
                         fd,
                         events: libc::POLLIN,

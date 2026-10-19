@@ -26,14 +26,13 @@ pub mod psi;
 
 #[cfg(feature = "lua")]
 pub use dispatch::{
-    dispatch_files, dispatch_files_with_progress, DispatchOpts, FileTimeout,
-    FileTimeoutOutcome,
+    dispatch_files, dispatch_files_with_progress, DispatchOpts, FileTimeout, FileTimeoutOutcome,
 };
 pub use events::{EventSink, MultiSink, NullSink, UnixSocketSink, WriteSink};
 pub use pool::{
     current_wait_sink, install_wait_sink, reserve, Account, AcquireError, ClaimExceeded,
-    ClaimSlice, Deadlock, Hold, OwnerId, Pool, Reservation, ReserveError, ResourceAmount,
-    WaitSink, WaitSinkGuard,
+    ClaimSlice, Deadlock, Hold, OwnerId, Pool, Reservation, ReserveError, ResourceAmount, WaitSink,
+    WaitSinkGuard,
 };
 pub use preflight::{run as run_preflight, PreflightError, PreflightReport};
 pub use psi::{spawn as spawn_psi_monitor, PressureFlag};

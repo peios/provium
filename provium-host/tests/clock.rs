@@ -21,7 +21,8 @@ fn config() -> Arc<Config> {
         "peios".into(),
         Profile {
             kernel: "/unused".into(),
-            initrd: "/unused".into(), root: None,
+            initrd: "/unused".into(),
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -30,7 +31,8 @@ fn config() -> Arc<Config> {
             disks: Vec::new(),
             cmdline_file: None,
             build: None,
-            build_out: None, dir: None,
+            build_out: None,
+            dir: None,
         },
     );
     Arc::new(Config {
@@ -49,8 +51,7 @@ fn run(source: &str) -> provium_host::lua::FileOutcome {
 
 #[test]
 fn clock_get_returns_current_unix_time() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("get", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local now = vm:clock():get()
@@ -59,16 +60,18 @@ test("get", function(t)
     t:assert(now > 1746000000, "clock too low: " .. now)
     t:assert(now < 2524608000, "clock too high: " .. now)
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 #[test]
 fn clock_sleep_actually_sleeps() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("sleep", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local before = vm:clock():get()
@@ -76,10 +79,13 @@ test("sleep", function(t)
     local after = vm:clock():get()
     t:assert(after - before >= 0.05, "should have slept ~100ms")
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 #[test]
@@ -88,8 +94,7 @@ fn clock_set_without_cap_sys_time_surfaces_eperm() {
     // CLOCK_REALTIME returns EPERM. We don't assert the exact
     // errno here (some sandboxes return EINVAL); just that the
     // op reports an OS error rather than silently succeeding.
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("set without cap", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local ok, err = pcall(function() vm:clock():set(1700000000) end)
@@ -100,8 +105,11 @@ test("set without cap", function(t)
         t:assert_contains(tostring(err), "os")
     end
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }

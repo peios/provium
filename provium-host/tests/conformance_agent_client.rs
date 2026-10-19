@@ -14,8 +14,10 @@ fn connect_error_includes_io_message() {
     let e = ClientError::Connect(io::Error::other("connection refused"));
     let s = e.to_string();
     assert!(s.contains("connect"), "Display must include 'connect': {s}");
-    assert!(s.contains("connection refused"),
-        "Display must include underlying io: {s}");
+    assert!(
+        s.contains("connection refused"),
+        "Display must include underlying io: {s}"
+    );
 }
 
 #[test]
@@ -32,10 +34,11 @@ fn frame_error_propagates_from_protocol() {
 fn version_mismatch_names_both_sides() {
     let e = ClientError::VersionMismatch { host: 5, agent: 3 };
     let s = e.to_string();
-    assert!(s.contains("host: 5"),
-        "Display must name host version: {s}");
-    assert!(s.contains("agent: 3"),
-        "Display must name agent version: {s}");
+    assert!(s.contains("host: 5"), "Display must name host version: {s}");
+    assert!(
+        s.contains("agent: 3"),
+        "Display must name agent version: {s}"
+    );
 }
 
 #[test]
@@ -57,17 +60,24 @@ fn agent_error_wraps_envelope_error() {
     };
     let e = ClientError::Agent(inner);
     let s = e.to_string();
-    assert!(s.contains("agent error"),
-        "Display must include 'agent error': {s}");
+    assert!(
+        s.contains("agent error"),
+        "Display must include 'agent error': {s}"
+    );
 }
 
 #[test]
 fn stream_source_carries_os_error() {
-    let inner = OsError { errno: 5, message: "EIO".into() };
+    let inner = OsError {
+        errno: 5,
+        message: "EIO".into(),
+    };
     let e = ClientError::StreamSource(inner);
     let s = e.to_string();
-    assert!(s.contains("stream source"),
-        "Display must include 'stream source': {s}");
+    assert!(
+        s.contains("stream source"),
+        "Display must include 'stream source': {s}"
+    );
     assert!(s.contains("EIO"), "Display must include errno message: {s}");
 }
 

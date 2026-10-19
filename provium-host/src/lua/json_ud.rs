@@ -48,8 +48,7 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     json.set(
         "decode",
         lua.create_function(|lua, s: String| {
-            let v: serde_json::Value =
-                serde_json::from_str(&s).map_err(mlua::Error::external)?;
+            let v: serde_json::Value = serde_json::from_str(&s).map_err(mlua::Error::external)?;
             json_to_lua(lua, &v)
         })?,
     )?;
@@ -89,9 +88,7 @@ fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<Value> {
                 Ok(Value::Number(n.as_f64().unwrap_or(0.0)))
             }
         }
-        serde_json::Value::String(s) => {
-            Ok(Value::String(lua.create_string(s.as_str())?))
-        }
+        serde_json::Value::String(s) => Ok(Value::String(lua.create_string(s.as_str())?)),
         serde_json::Value::Array(arr) => {
             let t = lua.create_table_with_capacity(arr.len(), 0)?;
             for (i, v) in arr.iter().enumerate() {
@@ -134,9 +131,7 @@ fn lua_to_json(value: Value) -> mlua::Result<serde_json::Value> {
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null)),
         Value::String(s) => Ok(serde_json::Value::String(
-            s.to_str()
-                .map_err(mlua::Error::external)?
-                .to_string(),
+            s.to_str().map_err(mlua::Error::external)?.to_string(),
         )),
         Value::Table(t) => table_to_json(t),
         other => Err(mlua::Error::external(format!(
@@ -191,10 +186,7 @@ fn table_to_json(t: Table) -> mlua::Result<serde_json::Value> {
     for pair in t.pairs::<Value, Value>() {
         let (k, v) = pair?;
         let k_str = match k {
-            Value::String(s) => s
-                .to_str()
-                .map_err(mlua::Error::external)?
-                .to_string(),
+            Value::String(s) => s.to_str().map_err(mlua::Error::external)?.to_string(),
             Value::Integer(i) => i.to_string(),
             Value::Number(n) => {
                 // Match Lua's tostring(): "3.0" for non-integer
@@ -299,9 +291,7 @@ mod tests {
     fn decode_nested() {
         let lua = fresh_lua();
         let s: String = lua
-            .load(
-                r#"local t = json.decode('{"a": {"b": ["c", "d"]}}'); return t.a.b[2]"#,
-            )
+            .load(r#"local t = json.decode('{"a": {"b": ["c", "d"]}}'); return t.a.b[2]"#)
             .eval()
             .unwrap();
         assert_eq!(s, "d");
@@ -396,10 +386,7 @@ mod tests {
         // not an integer. Regression guard against the new u64
         // path swallowing valid floats.
         let lua = fresh_lua();
-        let n: f64 = lua
-            .load(r#"return json.decode("1.25")"#)
-            .eval()
-            .unwrap();
+        let n: f64 = lua.load(r#"return json.decode("1.25")"#).eval().unwrap();
         assert_eq!(n, 1.25);
     }
 

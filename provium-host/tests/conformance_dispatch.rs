@@ -19,20 +19,28 @@ use provium_host::vmm::Vmm;
 
 fn config() -> Arc<Config> {
     let mut profiles = BTreeMap::new();
-    profiles.insert("peios".into(), Profile {
-        kernel: "/unused".into(),
-        initrd: "/unused".into(), root: None,
-        cmdline: "console=hvc0".into(),
-        guest_os: "peios".into(),
+    profiles.insert(
+        "peios".into(),
+        Profile {
+            kernel: "/unused".into(),
+            initrd: "/unused".into(),
+            root: None,
+            cmdline: "console=hvc0".into(),
+            guest_os: "peios".into(),
             inject_agent: true,
             agent_overlay_path: None,
             agent_boot_timeout: None,
             disks: Vec::new(),
             cmdline_file: None,
             build: None,
-            build_out: None, dir: None,
-    });
-    Arc::new(Config { provium: ProviumSection::default(), profiles })
+            build_out: None,
+            dir: None,
+        },
+    );
+    Arc::new(Config {
+        provium: ProviumSection::default(),
+        profiles,
+    })
 }
 
 fn write_test(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
@@ -42,7 +50,10 @@ fn write_test(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
 }
 
 fn pool_for_tests() -> Arc<Pool> {
-    Pool::new(ResourceAmount { memory_bytes: 1024 * 1024 * 1024, cpus: 4 })
+    Pool::new(ResourceAmount {
+        memory_bytes: 1024 * 1024 * 1024,
+        cpus: 4,
+    })
 }
 
 fn vmm_for_tests() -> Arc<dyn Vmm> {
@@ -50,9 +61,10 @@ fn vmm_for_tests() -> Arc<dyn Vmm> {
 }
 
 fn opts() -> DispatchOpts {
-    let mut o = DispatchOpts::default();
-    o.timeout = FileTimeout::Disabled;
-    o
+    DispatchOpts {
+        timeout: FileTimeout::Disabled,
+        ..DispatchOpts::default()
+    }
 }
 
 #[test]
@@ -91,15 +103,12 @@ fn dispatch_preserves_input_order() {
 #[test]
 fn passed_is_true_for_clean_run() {
     let dir = tempfile::tempdir().unwrap();
-    let p = write_test(dir.path(), "ok.test.lua",
-        "test('passes', function(t) t:assert(true) end)");
-    let outs = dispatch_files(
-        vec![p],
-        pool_for_tests(),
-        config(),
-        vmm_for_tests(),
-        opts(),
+    let p = write_test(
+        dir.path(),
+        "ok.test.lua",
+        "test('passes', function(t) t:assert(true) end)",
     );
+    let outs = dispatch_files(vec![p], pool_for_tests(), config(), vmm_for_tests(), opts());
     assert!(outs[0].passed(), "clean file must report passed=true");
     assert_eq!(outs[0].timeout, FileTimeoutOutcome::InTime);
 }
@@ -107,37 +116,31 @@ fn passed_is_true_for_clean_run() {
 #[test]
 fn passed_is_false_when_a_test_fails() {
     let dir = tempfile::tempdir().unwrap();
-    let p = write_test(dir.path(), "fail.test.lua",
-        "test('boom', function(t) t:assert(false, 'nope') end)");
-    let outs = dispatch_files(
-        vec![p],
-        pool_for_tests(),
-        config(),
-        vmm_for_tests(),
-        opts(),
+    let p = write_test(
+        dir.path(),
+        "fail.test.lua",
+        "test('boom', function(t) t:assert(false, 'nope') end)",
     );
+    let outs = dispatch_files(vec![p], pool_for_tests(), config(), vmm_for_tests(), opts());
     assert!(!outs[0].passed(), "failing file must report passed=false");
 }
 
 #[test]
 fn watchdog_fires_when_file_exceeds_timeout() {
     let dir = tempfile::tempdir().unwrap();
-    let p = write_test(dir.path(), "slow.test.lua",
+    let p = write_test(
+        dir.path(),
+        "slow.test.lua",
         // Busy-loop in Lua to force the watchdog to interrupt.
         // 2-second sleep > 200ms timeout.
         "test('slow', function(t)
             local s = os.time()
             while os.time() - s < 2 do end
-        end)");
+        end)",
+    );
     let mut o = opts();
     o.timeout = FileTimeout::Wall(Duration::from_millis(200));
-    let outs = dispatch_files(
-        vec![p],
-        pool_for_tests(),
-        config(),
-        vmm_for_tests(),
-        o,
-    );
+    let outs = dispatch_files(vec![p], pool_for_tests(), config(), vmm_for_tests(), o);
     assert_eq!(
         outs[0].timeout,
         FileTimeoutOutcome::TimedOut,
@@ -154,23 +157,23 @@ fn fail_fast_skips_subsequent_files() {
         memory_bytes: 100 * 1024 * 1024,
         cpus: 1,
     });
-    let a = write_test(dir.path(), "fail.test.lua",
-        "test('boom', function(t) t:assert(false) end)");
-    let b = write_test(dir.path(), "skipped.test.lua",
-        "test('would-pass', function(t) end)");
+    let a = write_test(
+        dir.path(),
+        "fail.test.lua",
+        "test('boom', function(t) t:assert(false) end)",
+    );
+    let b = write_test(
+        dir.path(),
+        "skipped.test.lua",
+        "test('would-pass', function(t) end)",
+    );
     let mut o = opts();
     o.fail_fast = true;
     o.per_file_overhead = ResourceAmount {
         memory_bytes: 50 * 1024 * 1024,
         cpus: 1,
     };
-    let outs = dispatch_files(
-        vec![a, b],
-        pool,
-        config(),
-        vmm_for_tests(),
-        o,
-    );
+    let outs = dispatch_files(vec![a, b], pool, config(), vmm_for_tests(), o);
     // First file must report a fail; second's behaviour is impl-
     // defined (skipped or didn't-run). The contract is just
     // "no NEW files are picked up after a failure".
@@ -179,12 +182,6 @@ fn fail_fast_skips_subsequent_files() {
 
 #[test]
 fn empty_input_returns_empty_output() {
-    let outs = dispatch_files(
-        vec![],
-        pool_for_tests(),
-        config(),
-        vmm_for_tests(),
-        opts(),
-    );
+    let outs = dispatch_files(vec![], pool_for_tests(), config(), vmm_for_tests(), opts());
     assert!(outs.is_empty());
 }

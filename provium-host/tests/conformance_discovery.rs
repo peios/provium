@@ -32,14 +32,16 @@ fn test_lua_suffix_picked_up() {
     write_file(dir.path(), "good.test.lua", "test('a', function(t) end)");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(dir.path().join("provium.toml"))
+        .arg("--config")
+        .arg(dir.path().join("provium.toml"))
         .arg(dir.path())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("good.test.lua") || stdout.contains("PASS")
-        || stdout.contains("ok"),
-        "*.test.lua must be discovered + run: stdout=`{stdout}`");
+    assert!(
+        stdout.contains("good.test.lua") || stdout.contains("PASS") || stdout.contains("ok"),
+        "*.test.lua must be discovered + run: stdout=`{stdout}`"
+    );
 }
 
 #[test]
@@ -50,53 +52,66 @@ fn non_test_lua_files_ignored() {
     write_file(dir.path(), "config.lua", "-- nor this");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(dir.path().join("provium.toml"))
+        .arg("--config")
+        .arg(dir.path().join("provium.toml"))
         .arg(dir.path())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("no *.test.lua files found"),
-        "non-test lua files must be ignored: `{stdout}`");
+    assert!(
+        stdout.contains("no *.test.lua files found"),
+        "non-test lua files must be ignored: `{stdout}`"
+    );
 }
 
 #[test]
 fn recursive_scan_finds_nested_files() {
     let dir = tempfile::tempdir().unwrap();
     cfg_in(dir.path());
-    write_file(dir.path(), "nested/sub/deep.test.lua",
-        "test('nested', function(t) end)");
+    write_file(
+        dir.path(),
+        "nested/sub/deep.test.lua",
+        "test('nested', function(t) end)",
+    );
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(dir.path().join("provium.toml"))
+        .arg("--config")
+        .arg(dir.path().join("provium.toml"))
         .arg(dir.path())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("deep.test.lua") || stdout.contains("nested"),
-        "recursive scan must find nested files: `{stdout}`");
+    assert!(
+        stdout.contains("deep.test.lua") || stdout.contains("nested"),
+        "recursive scan must find nested files: `{stdout}`"
+    );
 }
 
 #[test]
 fn filter_substring_match() {
     let dir = tempfile::tempdir().unwrap();
     cfg_in(dir.path());
-    write_file(dir.path(), "alpha.test.lua",
-        "test('a', function(t) end)");
-    write_file(dir.path(), "beta.test.lua",
-        "test('b', function(t) end)");
+    write_file(dir.path(), "alpha.test.lua", "test('a', function(t) end)");
+    write_file(dir.path(), "beta.test.lua", "test('b', function(t) end)");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(dir.path().join("provium.toml"))
-        .arg("--filter").arg("alpha")
+        .arg("--config")
+        .arg(dir.path().join("provium.toml"))
+        .arg("--filter")
+        .arg("alpha")
         .arg(dir.path())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     // alpha must be in output, beta must not
-    assert!(stdout.contains("alpha"),
-        "filter must match alpha: `{stdout}`");
-    assert!(!stdout.contains("beta.test.lua"),
-        "filter must exclude beta: `{stdout}`");
+    assert!(
+        stdout.contains("alpha"),
+        "filter must match alpha: `{stdout}`"
+    );
+    assert!(
+        !stdout.contains("beta.test.lua"),
+        "filter must exclude beta: `{stdout}`"
+    );
 }
 
 #[test]
@@ -105,15 +120,21 @@ fn fixture_lua_not_run_directly() {
     // standalone. Discovery skips them.
     let dir = tempfile::tempdir().unwrap();
     cfg_in(dir.path());
-    write_file(dir.path(), "x.fixture.lua",
-        "return provium:vm('a', 'peios'):snapshot()");
+    write_file(
+        dir.path(),
+        "x.fixture.lua",
+        "return provium:vm('a', 'peios'):snapshot()",
+    );
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(dir.path().join("provium.toml"))
+        .arg("--config")
+        .arg(dir.path().join("provium.toml"))
         .arg(dir.path())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("no *.test.lua files found"),
-        "*.fixture.lua must not be picked up by discovery: `{stdout}`");
+    assert!(
+        stdout.contains("no *.test.lua files found"),
+        "*.fixture.lua must not be picked up by discovery: `{stdout}`"
+    );
 }

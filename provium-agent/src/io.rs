@@ -13,9 +13,7 @@ use provium_protocol::wire::{AgentMessage, HostMessage};
 use crate::error::AgentRuntimeError;
 
 /// Read a single [`HostMessage`] frame from `reader`.
-pub(crate) fn read_host_message<R: Read>(
-    reader: &mut R,
-) -> Result<HostMessage, AgentRuntimeError> {
+pub(crate) fn read_host_message<R: Read>(reader: &mut R) -> Result<HostMessage, AgentRuntimeError> {
     Ok(read_frame(reader, DEFAULT_MAX_FRAME_BYTES)?)
 }
 

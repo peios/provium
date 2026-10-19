@@ -25,7 +25,8 @@ fn slice2_config() -> Arc<Config> {
         "peios".into(),
         Profile {
             kernel: "/unused-by-local-agent".into(),
-            initrd: "/unused-by-local-agent".into(), root: None,
+            initrd: "/unused-by-local-agent".into(),
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -34,7 +35,8 @@ fn slice2_config() -> Arc<Config> {
             disks: Vec::new(),
             cmdline_file: None,
             build: None,
-            build_out: None, dir: None,
+            build_out: None,
+            dir: None,
         },
     );
     Arc::new(Config {
@@ -59,8 +61,7 @@ fn run(source: &str) -> FileOutcome {
 
 #[test]
 fn vm_run_ok_path_passes() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("greet", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local r = vm:run("printf hello")
@@ -68,8 +69,7 @@ test("greet", function(t)
     t:assert_eq(r.exit_code, 0)
     t:assert_eq(r.stdout, "hello")
 end)
-"#,
-    );
+"#);
 
     assert_eq!(outcome.tests.len(), 1);
     assert_eq!(outcome.tests[0].name, "greet");
@@ -80,30 +80,29 @@ end)
 
 #[test]
 fn assertion_failure_marks_test_failed() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("eq fails", function(t)
     t:assert_eq(1, 2, "intentional")
 end)
-"#,
-    );
+"#);
 
     assert_eq!(outcome.tests.len(), 1);
     assert_eq!(outcome.tests[0].status, TestStatus::Failed);
     let msg = outcome.tests[0].message.as_deref().unwrap_or("");
-    assert!(msg.contains("intentional"), "msg should carry assertion text: {msg}");
+    assert!(
+        msg.contains("intentional"),
+        "msg should carry assertion text: {msg}"
+    );
 }
 
 #[test]
 fn t_skip_marks_test_skipped_with_reason() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("not applicable", function(t)
     t:skip("kernel doesn't support this yet")
     error("should never reach here")
 end)
-"#,
-    );
+"#);
 
     assert_eq!(outcome.tests.len(), 1);
     assert_eq!(outcome.tests[0].status, TestStatus::Skipped);
@@ -115,13 +114,11 @@ end)
 
 #[test]
 fn multiple_tests_run_in_declaration_order() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("alpha", function(t) t:assert(true) end)
 test("beta",  function(t) t:fail("nope") end)
 test("gamma", function(t) t:skip("later") end)
-"#,
-    );
+"#);
 
     assert_eq!(
         outcome
@@ -185,23 +182,20 @@ end)
 
 #[test]
 fn run_with_arg_table_avoids_shell_interpretation() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("no shell", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local r = vm:run("printf", {"%s", "hello world"})
     t:assert(r:ok())
     t:assert_eq(r.stdout, "hello world")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn run_with_shell_form_works() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("shell form", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local r = vm:run("echo a b c | wc -c")
@@ -209,36 +203,34 @@ test("shell form", function(t)
     -- "a b c\n" piped to wc -c is 6
     t:assert_eq(r.stdout, "6\n")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn assert_ok_raises_with_stdout_stderr_in_message() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("assert_ok captures output", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local r = vm:run("sh -c 'echo to-stderr >&2; exit 7'")
     r:assert_ok()
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Failed);
     let msg = outcome.tests[0].message.as_deref().unwrap_or("");
-    assert!(msg.contains("to-stderr"), "stderr should appear in error: {msg}");
+    assert!(
+        msg.contains("to-stderr"),
+        "stderr should appear in error: {msg}"
+    );
 }
 
 #[test]
 fn unknown_profile_surfaces_chunk_error_at_provium_vm_call() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("bad profile", function(t)
     local vm = provium:vm("dc1", "no-such-profile")
 end)
-"#,
-    );
+"#);
 
     // The error happens inside the test fn — caught as a per-test
     // failure, not a chunk error.
@@ -258,28 +250,24 @@ fn chunk_error_surfaces_as_file_level_failure() {
 
 #[test]
 fn t_log_collected_per_test() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("with log", function(t)
     t:log("step 1")
     t:log("step 2")
     t:assert(true)
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
     assert_eq!(outcome.tests[0].log, vec!["step 1", "step 2"]);
 }
 
 #[test]
 fn meta_table_passed_through_unchanged() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("with meta", {spec = "PSD-FOO §1.2"}, function(t)
     t:assert_eq(t.meta.spec, "PSD-FOO §1.2")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
@@ -317,8 +305,12 @@ end)
     );
 
     let outcome = run(&source);
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "tail test failed: {:?}", outcome.tests[0].message);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "tail test failed: {:?}",
+        outcome.tests[0].message
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -327,22 +319,19 @@ end)
 
 #[test]
 fn fresh_vm_starts_in_created_state() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("created", function(t)
     local vm = provium:vm("dc1", "peios")
     t:assert_eq(vm:state(), "created")
     t:assert_eq(vm:cid(), nil)
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn op_on_created_vm_raises_wrong_state() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("op before boot", function(t)
     local vm = provium:vm("dc1", "peios")
     local ok, err = pcall(function() return vm:run("echo") end)
@@ -350,85 +339,73 @@ test("op before boot", function(t)
     t:assert_contains(tostring(err), "not booted")
     t:assert_contains(tostring(err), "cannot run")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn boot_chain_returns_self() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("chain", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     t:assert_eq(vm:state(), "booted")
     t:assert(vm:cid() ~= nil)
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn double_boot_errors() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("double boot", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local ok, err = pcall(function() vm:boot() end)
     t:assert(not ok)
     t:assert_contains(tostring(err), "booted")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn lab_vm_lookup_returns_same_handle() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("lookup", function(t)
     local v1 = provium:vm("dc1", "peios")
     local v2 = provium:vm("dc1")  -- 1-arg lookup form
     t:assert_eq(v1:name(), v2:name())
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn lab_index_sugar_returns_named_vm() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("index sugar", function(t)
     local v1 = provium:vm("dc1", "peios")
     local v2 = provium.dc1
     t:assert(v2 ~= nil, "provium.dc1 should resolve")
     t:assert_eq(v1:name(), v2:name())
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn lab_index_returns_nil_for_unknown_vm() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("missing vm", function(t)
     t:assert_eq(provium.no_such_vm, nil)
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn lab_boot_batch_boots_every_unbooted_vm() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("batch boot", function(t)
     local v1 = provium:vm("dc1", "peios")
     local v2 = provium:vm("dc2", "peios")
@@ -439,30 +416,26 @@ test("batch boot", function(t)
     t:assert_eq(v2:state(), "booted")
     t:assert(v1:cid() ~= v2:cid(), "distinct CIDs")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn duplicate_vm_name_raises_clearly() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("dup", function(t)
     provium:vm("dc1", "peios")
     local ok, err = pcall(function() provium:vm("dc1", "peios") end)
     t:assert(not ok)
     t:assert_contains(tostring(err), "already used")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn lab_vm_names_lists_declared_in_lex_order() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("vm_names", function(t)
     provium:vm("zebra", "peios")
     provium:vm("alpha", "peios")
@@ -470,15 +443,13 @@ test("vm_names", function(t)
     t:assert_eq(names[1], "alpha")
     t:assert_eq(names[2], "zebra")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
 #[test]
 fn sub_lab_boots_with_parent_batch() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("sublab", function(t)
     provium:vm("top", "peios")
     local sub = provium:lab("dc")
@@ -487,8 +458,7 @@ test("sublab", function(t)
     t:assert_eq(provium.top:state(), "booted")
     t:assert_eq(sub:vm("inner"):state(), "booted")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
@@ -497,16 +467,14 @@ fn pause_and_resume_unsupported_on_local_agent_vmm() {
     // LocalAgentVmm intentionally returns Unimplemented for
     // pause/resume — there's no real VM. Tests confirm the error
     // bubbles cleanly to Lua rather than panicking.
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("pause unsupported", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local ok, err = pcall(function() vm:pause() end)
     t:assert(not ok)
     t:assert_contains(tostring(err), "not yet implemented")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }
 
@@ -516,8 +484,7 @@ end)
 
 #[test]
 fn open_file_increments_open_file_count_close_decrements() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("open count", function(t)
     -- Use the underlying Lua bindings indirectly: a real test would
     -- use the agent's open_file, but slice-7 wants the registry
@@ -530,8 +497,7 @@ test("open count", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local tail = vm:tail_file("/tmp/agent-self-tail-target-7-1")
 end)
-"#,
-    );
+"#);
     // The tail_file call refers to a path that doesn't exist in the
     // local-agent's filesystem, so the open-ack is `Err`. The error
     // bubbles as a Lua error; the test fails. This is fine — we're
@@ -561,14 +527,17 @@ end)
         path = path_str,
     );
     let outcome = run(&source);
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
+    );
 }
 
 #[test]
 fn shutdown_then_op_raises_clean_lua_error() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("post-shutdown op", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     vm:shutdown()
@@ -577,7 +546,6 @@ test("post-shutdown op", function(t)
     t:assert_contains(tostring(err), "shutdown")
     t:assert_contains(tostring(err), "cannot run")
 end)
-"#,
-    );
+"#);
     assert_eq!(outcome.tests[0].status, TestStatus::Passed);
 }

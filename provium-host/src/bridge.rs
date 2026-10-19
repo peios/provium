@@ -146,8 +146,7 @@ impl Bridge {
     /// child blocks the snapshot the same way a tail-file stream
     /// would.
     pub fn active_captures(&self) -> usize {
-        self.captures
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.captures.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Register a new capture stream — bumps the active-capture
@@ -200,10 +199,7 @@ impl Bridge {
         // device) are silently ignored.
         if was_realized && had_tap {
             let bridge_name = self.name.clone();
-            let tap = crate::bridge_realize::tap_name_for_vm_on_bridge(
-                vm_name,
-                &bridge_name,
-            );
+            let tap = crate::bridge_realize::tap_name_for_vm_on_bridge(vm_name, &bridge_name);
             let _ = run_ip(&["link", "del", "dev", &tap]);
         }
         let _ = self.refresh_partitions();
@@ -356,7 +352,13 @@ impl Bridge {
 
     /// Snapshot of the routed-to bridges.
     pub fn routes(&self) -> Vec<String> {
-        self.inner.lock().unwrap().routed_to.iter().cloned().collect()
+        self.inner
+            .lock()
+            .unwrap()
+            .routed_to
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Isolate `vm` from everyone else on the bridge. Mutually
@@ -449,12 +451,24 @@ impl Bridge {
 
     /// Snapshot of every symmetric pair partition.
     pub fn symmetric_partitions(&self) -> Vec<(String, String)> {
-        self.inner.lock().unwrap().partitions.iter().cloned().collect()
+        self.inner
+            .lock()
+            .unwrap()
+            .partitions
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Snapshot of the isolated-vm set.
     pub fn isolated_vms(&self) -> Vec<String> {
-        self.inner.lock().unwrap().isolated.iter().cloned().collect()
+        self.inner
+            .lock()
+            .unwrap()
+            .isolated
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// `true` if the bridge is in the "everyone partitioned from
@@ -792,9 +806,8 @@ impl Bridge {
         run_cmd(
             "tc",
             &[
-                "qdisc", "replace", "dev", &self.name, "root", "handle", "1:",
-                "tbf", "rate", &bps_str, "burst", &burst_str, "limit",
-                &limit_str,
+                "qdisc", "replace", "dev", &self.name, "root", "handle", "1:", "tbf", "rate",
+                &bps_str, "burst", &burst_str, "limit", &limit_str,
             ],
         )?;
         Ok(())
@@ -847,7 +860,11 @@ impl Bridge {
         run_cmd(
             "nft",
             &[
-                "add", "chain", "bridge", &table_name, "forward",
+                "add",
+                "chain",
+                "bridge",
+                &table_name,
+                "forward",
                 "{ type filter hook forward priority 0 ; }",
             ],
         )?;
@@ -860,7 +877,10 @@ impl Bridge {
                         continue;
                     }
                     let rule = format!("iifname \"{a}\" oifname \"{b}\" drop");
-                    run_cmd("nft", &["add", "rule", "bridge", &table_name, "forward", &rule])?;
+                    run_cmd(
+                        "nft",
+                        &["add", "rule", "bridge", &table_name, "forward", &rule],
+                    )?;
                 }
             }
             return Ok(());
@@ -872,7 +892,10 @@ impl Bridge {
             let tb = crate::bridge_realize::tap_name_for_vm_on_bridge(vb, &bridge_name);
             for (i, o) in [(&ta, &tb), (&tb, &ta)] {
                 let rule = format!("iifname \"{i}\" oifname \"{o}\" drop");
-                run_cmd("nft", &["add", "rule", "bridge", &table_name, "forward", &rule])?;
+                run_cmd(
+                    "nft",
+                    &["add", "rule", "bridge", &table_name, "forward", &rule],
+                )?;
             }
         }
         // Directional partitions: drop only `from→to`; reverse
@@ -881,7 +904,10 @@ impl Bridge {
             let tf = crate::bridge_realize::tap_name_for_vm_on_bridge(from, &bridge_name);
             let tt = crate::bridge_realize::tap_name_for_vm_on_bridge(to, &bridge_name);
             let rule = format!("iifname \"{tf}\" oifname \"{tt}\" drop");
-            run_cmd("nft", &["add", "rule", "bridge", &table_name, "forward", &rule])?;
+            run_cmd(
+                "nft",
+                &["add", "rule", "bridge", &table_name, "forward", &rule],
+            )?;
         }
         // Isolation: for each isolated VM, drop traffic to/from
         // every other member.
@@ -893,7 +919,10 @@ impl Bridge {
                 }
                 for (i, o) in [(&ti, other), (other, &ti)] {
                     let rule = format!("iifname \"{i}\" oifname \"{o}\" drop");
-                    run_cmd("nft", &["add", "rule", "bridge", &table_name, "forward", &rule])?;
+                    run_cmd(
+                        "nft",
+                        &["add", "rule", "bridge", &table_name, "forward", &rule],
+                    )?;
                 }
             }
         }
@@ -952,7 +981,11 @@ impl Bridge {
     fn refresh_uplink(&self) -> std::io::Result<()> {
         let (want, have, bridge) = {
             let inner = self.inner.lock().unwrap();
-            (inner.uplink_enabled, inner.uplink_realized, self.name.clone())
+            (
+                inner.uplink_enabled,
+                inner.uplink_realized,
+                self.name.clone(),
+            )
         };
         if want == have {
             return Ok(());
@@ -979,18 +1012,21 @@ impl Bridge {
             let _ = std::fs::write("/proc/sys/net/ipv4/ip_forward", "1");
             // Install a per-bridge masquerade rule. nftables form
             // preferred; fall back to iptables if nft isn't on PATH.
-            if run_cmd("nft", &[
-                "add", "table", "ip", &table,
-            ]).is_ok()
-                && run_cmd("nft", &[
-                    "add", "chain", "ip", &table, "postrouting",
-                    "{ type nat hook postrouting priority 100 ; }",
-                ])
+            if run_cmd("nft", &["add", "table", "ip", &table]).is_ok()
+                && run_cmd(
+                    "nft",
+                    &[
+                        "add",
+                        "chain",
+                        "ip",
+                        &table,
+                        "postrouting",
+                        "{ type nat hook postrouting priority 100 ; }",
+                    ],
+                )
                 .is_ok()
             {
-                let rule = format!(
-                    "oifname \"{upstream}\" iifname \"{bridge}\" masquerade"
-                );
+                let rule = format!("oifname \"{upstream}\" iifname \"{bridge}\" masquerade");
                 run_cmd("nft", &["add", "rule", "ip", &table, "postrouting", &rule])?;
             } else {
                 // iptables POSTROUTING does NOT accept `-i` —
@@ -1006,8 +1042,14 @@ impl Bridge {
                 run_cmd(
                     "iptables",
                     &[
-                        "-t", "nat", "-A", "POSTROUTING", "-o", &upstream,
-                        "-j", "MASQUERADE",
+                        "-t",
+                        "nat",
+                        "-A",
+                        "POSTROUTING",
+                        "-o",
+                        &upstream,
+                        "-j",
+                        "MASQUERADE",
                     ],
                 )?;
             }
@@ -1016,8 +1058,14 @@ impl Bridge {
             let _ = run_cmd(
                 "iptables",
                 &[
-                    "-t", "nat", "-D", "POSTROUTING", "-o", &upstream,
-                    "-j", "MASQUERADE",
+                    "-t",
+                    "nat",
+                    "-D",
+                    "POSTROUTING",
+                    "-o",
+                    &upstream,
+                    "-j",
+                    "MASQUERADE",
                 ],
             );
             let _ = run_cmd("nft", &["delete", "table", "ip", &table]);
@@ -1034,10 +1082,7 @@ impl Bridge {
     /// generation and live realisation produce identical netem
     /// args (was inconsistent: plan picked the FIRST partner's
     /// values, realize used the max).
-    pub fn collapsed_directional_for_pub(
-        &self,
-        vm: &str,
-    ) -> Option<(u32, u32, u64)> {
+    pub fn collapsed_directional_for_pub(&self, vm: &str) -> Option<(u32, u32, u64)> {
         self.collapsed_directional_for(vm)
     }
 
@@ -1133,8 +1178,14 @@ impl Bridge {
                 let _ = run_cmd(
                     "iptables",
                     &[
-                        "-t", "nat", "-D", "POSTROUTING", "-o", &upstream,
-                        "-j", "MASQUERADE",
+                        "-t",
+                        "nat",
+                        "-D",
+                        "POSTROUTING",
+                        "-o",
+                        &upstream,
+                        "-j",
+                        "MASQUERADE",
                     ],
                 );
             }
@@ -1219,15 +1270,14 @@ fn install_htb_with_optional_netem(
     bps_bits: u64,
 ) -> std::io::Result<()> {
     run_tc(&[
-        "qdisc", "add", "dev", tap, "root", "handle", "1:", "htb",
-        "default", "10",
+        "qdisc", "add", "dev", tap, "root", "handle", "1:", "htb", "default", "10",
     ])?;
     let rate_str = format!("{bps_bits}bit");
     let burst = (bps_bits / 800).max(1500);
     let burst_str = burst.to_string();
     run_tc(&[
-        "class", "add", "dev", tap, "parent", "1:", "classid", "1:10",
-        "htb", "rate", &rate_str, "ceil", &rate_str, "burst", &burst_str,
+        "class", "add", "dev", tap, "parent", "1:", "classid", "1:10", "htb", "rate", &rate_str,
+        "ceil", &rate_str, "burst", &burst_str,
     ])?;
     if lat > 0 || drop > 0 {
         let mut args: Vec<String> = vec![
@@ -1469,9 +1519,9 @@ mod tests {
         // Round-trip survives `directional_pairs` (used by
         // LabSnapshotDirectional).
         let pairs = b.directional_pairs();
-        assert!(pairs.iter().any(|((f, t), d)| {
-            f == "a" && t == "b" && d.bandwidth_bps == 1_000_000
-        }));
+        assert!(pairs
+            .iter()
+            .any(|((f, t), d)| { f == "a" && t == "b" && d.bandwidth_bps == 1_000_000 }));
     }
 
     #[test]

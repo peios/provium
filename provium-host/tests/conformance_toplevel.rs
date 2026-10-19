@@ -104,7 +104,8 @@ end)
         assert_ne!(
             t0.status,
             provium_host::lua::TestStatus::Failed,
-            "todo() left a test failing: {:?}", t0.message,
+            "todo() left a test failing: {:?}",
+            t0.message,
         );
     }
 }

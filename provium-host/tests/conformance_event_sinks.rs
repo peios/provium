@@ -6,9 +6,7 @@
 use std::io::Read;
 use std::sync::Arc;
 
-use provium_host::scheduler::events::{
-    EventSink, MultiSink, NullSink, WriteSink,
-};
+use provium_host::scheduler::events::{EventSink, MultiSink, NullSink, WriteSink};
 use provium_protocol::events::{Event, EventFrame, FileDiscovered};
 use provium_protocol::frame::{read_frame, DEFAULT_MAX_FRAME_BYTES};
 
@@ -37,13 +35,16 @@ fn write_sink_persists_emitted_events_to_file() {
         // Drop sink to flush.
     }
     let mut bytes = Vec::new();
-    std::fs::File::open(&path).unwrap().read_to_end(&mut bytes).unwrap();
+    std::fs::File::open(&path)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
     assert!(!bytes.is_empty(), "emitted event must hit disk");
 
     // Decode back — must be a complete EventFrame.
     let mut cursor = std::io::Cursor::new(&bytes);
-    let frame: EventFrame = read_frame(&mut cursor, DEFAULT_MAX_FRAME_BYTES)
-        .expect("frame must round-trip from disk");
+    let frame: EventFrame =
+        read_frame(&mut cursor, DEFAULT_MAX_FRAME_BYTES).expect("frame must round-trip from disk");
     if let Event::FileDiscovered(payload) = frame.event {
         assert_eq!(payload.path, "tests/x.test.lua");
     } else {
@@ -62,12 +63,14 @@ fn write_sink_appends_multiple_frames() {
         sink.emit(sample_event());
     }
     let mut bytes = Vec::new();
-    std::fs::File::open(&path).unwrap().read_to_end(&mut bytes).unwrap();
+    std::fs::File::open(&path)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
     let mut cursor = std::io::Cursor::new(&bytes);
     let mut count = 0;
     while cursor.position() < bytes.len() as u64 {
-        let _: EventFrame = read_frame(&mut cursor, DEFAULT_MAX_FRAME_BYTES)
-            .expect("decode frame");
+        let _: EventFrame = read_frame(&mut cursor, DEFAULT_MAX_FRAME_BYTES).expect("decode frame");
         count += 1;
     }
     assert_eq!(count, 3, "all three frames must persist");
@@ -125,6 +128,9 @@ fn write_sink_file_truncate_resets_existing_log() {
     let bytes = std::fs::read(&path).unwrap();
     // The first byte should NOT be 'O' (would be from "OLD GARBAGE")
     // — truncate must have reset before our emit.
-    assert_ne!(bytes.first(), Some(&b'O'),
-        "truncate=true must reset the log before emit");
+    assert_ne!(
+        bytes.first(),
+        Some(&b'O'),
+        "truncate=true must reset the log before emit"
+    );
 }

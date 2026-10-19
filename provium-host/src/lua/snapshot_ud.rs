@@ -21,9 +21,7 @@ pub(crate) struct SnapshotUd {
 
 impl UserData for SnapshotUd {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("path", |_, this, ()| {
-            Ok(this.path.display().to_string())
-        });
+        methods.add_method("path", |_, this, ()| Ok(this.path.display().to_string()));
         methods.add_method("size", |_, this, ()| {
             // After `snap:delete()` the file is gone. DESIGN.md
             // documents `snap:delete` as idempotent and lists

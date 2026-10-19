@@ -16,7 +16,8 @@ fn config() -> Arc<Config> {
         "peios".into(),
         Profile {
             kernel: "/unused".into(),
-            initrd: "/unused".into(), root: None,
+            initrd: "/unused".into(),
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -25,7 +26,8 @@ fn config() -> Arc<Config> {
             disks: Vec::new(),
             cmdline_file: None,
             build: None,
-            build_out: None, dir: None,
+            build_out: None,
+            dir: None,
         },
     );
     Arc::new(Config {
@@ -46,8 +48,7 @@ fn run(source: &str) -> provium_host::lua::FileOutcome {
 fn console_read_returns_empty_on_local_agent() {
     // LocalAgentVmm doesn't materialise a console log file, so
     // vm:console():read returns empty bytes.
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("empty console", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     -- console:read returns a Stream per DESIGN.md; LocalAgentVmm
@@ -56,44 +57,51 @@ test("empty console", function(t)
     local content = vm:console():read_log()
     t:assert_eq(#content, 0)
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 #[test]
 fn syscall_getpid_returns_a_positive_pid() {
     // SYS_getpid on Linux x86_64 is 39. The agent's own pid is
     // returned (non-negative).
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("getpid", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local r = vm:syscall(39)
     t:assert(r.ret > 0, "pid should be > 0; got " .. tostring(r.ret))
     t:assert_eq(r.errno, 0)
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 #[test]
 fn syscall_with_invalid_nr_reports_errno() {
     // A syscall number well past anything Linux defines returns
     // -1 with errno set to ENOSYS (38).
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("bad nr", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local r = vm:syscall(99999)
     t:assert(r.ret < 0)
     t:assert_eq(r.errno, 38)  -- ENOSYS
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }

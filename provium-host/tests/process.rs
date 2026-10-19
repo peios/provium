@@ -17,7 +17,8 @@ fn config() -> Arc<Config> {
         "peios".into(),
         Profile {
             kernel: "/unused".into(),
-            initrd: "/unused".into(), root: None,
+            initrd: "/unused".into(),
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -26,7 +27,8 @@ fn config() -> Arc<Config> {
             disks: Vec::new(),
             cmdline_file: None,
             build: None,
-            build_out: None, dir: None,
+            build_out: None,
+            dir: None,
         },
     );
     Arc::new(Config {
@@ -45,8 +47,7 @@ fn run(source: &str) -> provium_host::lua::FileOutcome {
 
 #[test]
 fn run_async_then_wait_returns_run_result() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("async echo", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local proc = vm:run_async("printf", {"hello"})
@@ -54,16 +55,18 @@ test("async echo", function(t)
     t:assert(r:ok())
     t:assert_eq(r.stdout, "hello")
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 #[test]
 fn run_async_then_kill_then_wait_reports_signal() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("kill async", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local proc = vm:run_async("sleep", {"30"})
@@ -73,16 +76,18 @@ test("kill async", function(t)
     -- not a clean exit. status field is "signalled".
     t:assert_eq(r.status, "signalled")
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 #[test]
 fn wait_with_timeout_kills_runaway_child() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("timeout kills", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     local proc = vm:run_async("sh", {"-c", "sleep 30"})
@@ -91,16 +96,18 @@ test("timeout kills", function(t)
     local r = proc:wait("150ms")
     t:assert(r.timed_out, "expected timed_out true")
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 #[test]
 fn run_async_invalid_binary_raises_os_error() {
-    let outcome = run(
-        r#"
+    let outcome = run(r#"
 test("missing binary", function(t)
     local vm = provium:vm("dc1", "peios"):boot()
     -- Pass an args table so we hit direct exec (not shell form).
@@ -109,10 +116,13 @@ test("missing binary", function(t)
     t:assert(not ok)
     t:assert_contains(tostring(err), "No such file")
 end)
-"#,
+"#);
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Passed,
+        "{:?}",
+        outcome.tests[0].message
     );
-    assert_eq!(outcome.tests[0].status, TestStatus::Passed,
-        "{:?}", outcome.tests[0].message);
 }
 
 // keep imports referenced

@@ -12,9 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::handle::WorkerHandle;
 
 use super::exec::{ExecArgs, ExecResult};
-use super::file::{
-    OpenFileArgs, OpenFileResult,
-};
+use super::file::{OpenFileArgs, OpenFileResult};
 use super::process::{RunAsyncArgs, RunAsyncResult};
 use super::syscall::{SyscallArgs, SyscallResult};
 use super::OpResult;

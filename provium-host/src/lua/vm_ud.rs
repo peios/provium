@@ -175,15 +175,15 @@ impl UserData for VmUd {
         // a bare path string for ergonomics.
         methods.add_method("restore", |_, this, arg: Value| {
             let path: std::path::PathBuf = match arg {
-                Value::String(s) => std::path::PathBuf::from(
-                    s.to_str().map_err(mlua::Error::external)?.to_string(),
-                ),
+                Value::String(s) => {
+                    std::path::PathBuf::from(s.to_str().map_err(mlua::Error::external)?.to_string())
+                }
                 Value::UserData(ud) => {
-                    let snap = ud
-                        .borrow::<super::snapshot_ud::SnapshotUd>()
-                        .map_err(|_| mlua::Error::external(
+                    let snap = ud.borrow::<super::snapshot_ud::SnapshotUd>().map_err(|_| {
+                        mlua::Error::external(
                             "vm:restore: expected snapshot userdata or path string",
-                        ))?;
+                        )
+                    })?;
                     snap.path.clone()
                 }
                 other => {
@@ -193,9 +193,7 @@ impl UserData for VmUd {
                     )));
                 }
             };
-            this.vm
-                .restore(&path)
-                .map_err(mlua::Error::external)?;
+            this.vm.restore(&path).map_err(mlua::Error::external)?;
             Ok(())
         });
 
@@ -352,11 +350,7 @@ impl UserData for VmUd {
                 }
             }
             let w = this.vm.spawn_worker().map_err(mlua::Error::external)?;
-            super::result_ud::register_resource(
-                lua,
-                super::result_ud::WorkerUd::wrap(w),
-                "worker",
-            )
+            super::result_ud::register_resource(lua, super::result_ud::WorkerUd::wrap(w), "worker")
         });
 
         // Lifecycle extras (slice C).
@@ -428,13 +422,10 @@ impl UserData for VmUd {
             this.vm.unlink(path).map_err(mlua::Error::external)?;
             Ok(())
         });
-        methods.add_method(
-            "rename",
-            |_, this, (from, to): (String, String)| {
-                this.vm.rename(from, to).map_err(mlua::Error::external)?;
-                Ok(())
-            },
-        );
+        methods.add_method("rename", |_, this, (from, to): (String, String)| {
+            this.vm.rename(from, to).map_err(mlua::Error::external)?;
+            Ok(())
+        });
 
         // Hypervisor-side resources.
         //
@@ -465,10 +456,7 @@ impl UserData for VmUd {
                 attachments.sort();
                 if let Some(bridge_name) = attachments.get(idx) {
                     if let Some(bridge) = this.vm.bridge_for(bridge_name) {
-                        return Ok(super::nic_ud::NicUd::with_vm(
-                            bridge,
-                            this.vm.clone(),
-                        ));
+                        return Ok(super::nic_ud::NicUd::with_vm(bridge, this.vm.clone()));
                     }
                 }
             }
@@ -496,48 +484,45 @@ impl UserData for VmUd {
                 this.vm.clone(),
             ))
         });
-        methods.add_method(
-            "attach_disk",
-            |_, this, opts: Option<mlua::Table>| {
-                let id = opts
-                    .as_ref()
-                    .and_then(|t| t.get::<Option<String>>("id").ok().flatten())
-                    .unwrap_or_else(|| format!("attached-{}", this.vm.name()));
-                let size = opts
-                    .as_ref()
-                    .and_then(|t| t.get::<Option<u64>>("size").ok().flatten())
-                    .unwrap_or(4 * 1024 * 1024 * 1024);
-                let image: Option<std::path::PathBuf> = opts
-                    .as_ref()
-                    .and_then(|t| t.get::<Option<String>>("image").ok().flatten())
-                    .map(std::path::PathBuf::from);
-                let readonly = opts
-                    .as_ref()
-                    .and_then(|t| t.get::<Option<bool>>("readonly").ok().flatten())
-                    .unwrap_or(false);
-                // Records the attachment, and — on a live VM with a
-                // backing image — hot-plugs a device the guest can
-                // actually see. Without an image there is nothing to
-                // plug in, so the record alone is the whole effect,
-                // which is what sector-access-only callers rely on.
-                this.vm
-                    .attach_disk_live(
-                        crate::vm::DiskAttachment {
-                            id: id.clone(),
-                            size,
-                            image: image.clone(),
-                        },
-                        readonly,
-                    )
-                    .map_err(mlua::Error::external)?;
-                Ok(super::disk_ud::DiskUd::with_image_and_vm(
-                    id,
-                    size,
-                    image,
-                    this.vm.clone(),
-                ))
-            },
-        );
+        methods.add_method("attach_disk", |_, this, opts: Option<mlua::Table>| {
+            let id = opts
+                .as_ref()
+                .and_then(|t| t.get::<Option<String>>("id").ok().flatten())
+                .unwrap_or_else(|| format!("attached-{}", this.vm.name()));
+            let size = opts
+                .as_ref()
+                .and_then(|t| t.get::<Option<u64>>("size").ok().flatten())
+                .unwrap_or(4 * 1024 * 1024 * 1024);
+            let image: Option<std::path::PathBuf> = opts
+                .as_ref()
+                .and_then(|t| t.get::<Option<String>>("image").ok().flatten())
+                .map(std::path::PathBuf::from);
+            let readonly = opts
+                .as_ref()
+                .and_then(|t| t.get::<Option<bool>>("readonly").ok().flatten())
+                .unwrap_or(false);
+            // Records the attachment, and — on a live VM with a
+            // backing image — hot-plugs a device the guest can
+            // actually see. Without an image there is nothing to
+            // plug in, so the record alone is the whole effect,
+            // which is what sector-access-only callers rely on.
+            this.vm
+                .attach_disk_live(
+                    crate::vm::DiskAttachment {
+                        id: id.clone(),
+                        size,
+                        image: image.clone(),
+                    },
+                    readonly,
+                )
+                .map_err(mlua::Error::external)?;
+            Ok(super::disk_ud::DiskUd::with_image_and_vm(
+                id,
+                size,
+                image,
+                this.vm.clone(),
+            ))
+        });
 
         // Layer-0 ioctl.
         //
@@ -546,62 +531,59 @@ impl UserData for VmUd {
         //   vm:ioctl(fd, cmd, data_bytes)
         //   vm:ioctl(fd, cmd, data_bytes, {bufs={…}, ptr_offsets={…}})
         // Returns {ret, result, out_data, out_bufs}.
-        methods.add_method(
-            "ioctl",
-            |lua, this, args: mlua::Variadic<Value>| {
-                let fd = args
-                    .first()
-                    .and_then(|v| match v {
-                        Value::Integer(i) => Some(*i as u64),
-                        _ => None,
-                    })
-                    .ok_or_else(|| mlua::Error::external("ioctl: missing fd"))?;
-                let cmd = args
-                    .get(1)
-                    .and_then(|v| match v {
-                        Value::Integer(i) => Some(*i as u64),
-                        _ => None,
-                    })
-                    .ok_or_else(|| mlua::Error::external("ioctl: missing cmd"))?;
-                let data = args
-                    .get(2)
-                    .and_then(|v| match v {
-                        Value::String(s) => Some(s.as_bytes().to_vec()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                let mut bufs: Vec<Vec<u8>> = Vec::new();
-                let mut ptr_offsets: Vec<u32> = Vec::new();
-                if let Some(Value::Table(t)) = args.get(3) {
-                    if let Ok(b) = t.get::<mlua::Table>("bufs") {
-                        for pair in b.sequence_values::<mlua::String>() {
-                            let s = pair?;
-                            bufs.push(s.as_bytes().to_vec());
-                        }
-                    }
-                    if let Ok(p) = t.get::<mlua::Table>("ptr_offsets") {
-                        for pair in p.sequence_values::<u32>() {
-                            ptr_offsets.push(pair?);
-                        }
+        methods.add_method("ioctl", |lua, this, args: mlua::Variadic<Value>| {
+            let fd = args
+                .first()
+                .and_then(|v| match v {
+                    Value::Integer(i) => Some(*i as u64),
+                    _ => None,
+                })
+                .ok_or_else(|| mlua::Error::external("ioctl: missing fd"))?;
+            let cmd = args
+                .get(1)
+                .and_then(|v| match v {
+                    Value::Integer(i) => Some(*i as u64),
+                    _ => None,
+                })
+                .ok_or_else(|| mlua::Error::external("ioctl: missing cmd"))?;
+            let data = args
+                .get(2)
+                .and_then(|v| match v {
+                    Value::String(s) => Some(s.as_bytes().to_vec()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let mut bufs: Vec<Vec<u8>> = Vec::new();
+            let mut ptr_offsets: Vec<u32> = Vec::new();
+            if let Some(Value::Table(t)) = args.get(3) {
+                if let Ok(b) = t.get::<mlua::Table>("bufs") {
+                    for pair in b.sequence_values::<mlua::String>() {
+                        let s = pair?;
+                        bufs.push(s.as_bytes().to_vec());
                     }
                 }
-                let h = provium_protocol::handle::FileHandle::new(fd);
-                let r = this
-                    .vm
-                    .ioctl_with_ptrs(h, cmd, data, bufs, ptr_offsets)
-                    .map_err(mlua::Error::external)?;
-                let table = lua.create_table()?;
-                table.set("ret", r.ret)?;
-                table.set("result", r.ret)?;
-                table.set("out_data", lua.create_string(&r.out_data)?)?;
-                let outs = lua.create_table()?;
-                for (i, b) in r.out_bufs.into_iter().enumerate() {
-                    outs.set(i + 1, lua.create_string(&b)?)?;
+                if let Ok(p) = t.get::<mlua::Table>("ptr_offsets") {
+                    for pair in p.sequence_values::<u32>() {
+                        ptr_offsets.push(pair?);
+                    }
                 }
-                table.set("out_bufs", outs)?;
-                Ok(Value::Table(table))
-            },
-        );
+            }
+            let h = provium_protocol::handle::FileHandle::new(fd);
+            let r = this
+                .vm
+                .ioctl_with_ptrs(h, cmd, data, bufs, ptr_offsets)
+                .map_err(mlua::Error::external)?;
+            let table = lua.create_table()?;
+            table.set("ret", r.ret)?;
+            table.set("result", r.ret)?;
+            table.set("out_data", lua.create_string(&r.out_data)?)?;
+            let outs = lua.create_table()?;
+            for (i, b) in r.out_bufs.into_iter().enumerate() {
+                outs.set(i + 1, lua.create_string(&b)?)?;
+            }
+            table.set("out_bufs", outs)?;
+            Ok(Value::Table(table))
+        });
 
         methods.add_method("console", |_, this, ()| {
             Ok(super::result_ud::ConsoleUd::new(this.vm.clone()))
@@ -787,9 +769,8 @@ impl UserData for VmUd {
                 Value::Number(n) if n > 0.0 => n as u64,
                 Value::UserData(ud) => {
                     if let Ok(file) = ud.borrow::<super::file_ud::FileUd>() {
-                        file.raw_handle().ok_or_else(|| {
-                            mlua::Error::external("vm:fd_stream: file is closed")
-                        })?
+                        file.raw_handle()
+                            .ok_or_else(|| mlua::Error::external("vm:fd_stream: file is closed"))?
                     } else {
                         return Err(mlua::Error::external(
                             "vm:fd_stream expected a File userdata or integer fd",
@@ -804,10 +785,7 @@ impl UserData for VmUd {
                 }
             };
             let handle = provium_protocol::handle::FileHandle::new(raw_handle);
-            let session = this
-                .vm
-                .fd_stream(handle)
-                .map_err(mlua::Error::external)?;
+            let session = this.vm.fd_stream(handle).map_err(mlua::Error::external)?;
             let site = super::result_ud::capture_creation_site(lua);
             let test_name = super::result_ud::current_test_name(lua);
             this.vm.set_stream_meta(
@@ -819,11 +797,7 @@ impl UserData for VmUd {
                     test_name,
                 },
             );
-            super::result_ud::register_resource(
-                lua,
-                TailUd::new_with_site(session, site),
-                "stream",
-            )
+            super::result_ud::register_resource(lua, TailUd::new_with_site(session, site), "stream")
         });
 
         // ---------------------------------------------------------------
@@ -841,7 +815,10 @@ impl UserData for VmUd {
                 "vm({} state={} cid={})",
                 this.vm.name(),
                 this.vm.state().as_str(),
-                this.vm.cid().map(|c| c.to_string()).unwrap_or_else(|| "-".into()),
+                this.vm
+                    .cid()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "-".into()),
             ))
         });
 
@@ -976,50 +953,50 @@ impl UserData for BatchUd {
             ));
             Ok(())
         });
+        methods.add_method("rename", |_, this, (from, to): (String, String)| {
+            this.push(provium_protocol::wire::HostMessage::Rename(
+                provium_protocol::wire::RenameArgs { from, to },
+            ));
+            Ok(())
+        });
         methods.add_method(
-            "rename",
-            |_, this, (from, to): (String, String)| {
-                this.push(provium_protocol::wire::HostMessage::Rename(
-                    provium_protocol::wire::RenameArgs { from, to },
+            "syscall",
+            |_, this, (nr, args): (i64, mlua::Variadic<Value>)| {
+                // Reject the table form `vm:syscall(nr, {args=, bufs=,
+                // ptrs=})` with a clear pointer rather than silently
+                // dropping bufs/ptrs. The non-batch path supports it
+                // via build_syscall_args; the batch form would need
+                // its own parsing pass plus per-item buffer return
+                // shape that isn't implemented yet.
+                if args.len() == 1 {
+                    if let Some(Value::Table(_)) = args.first() {
+                        return Err(mlua::Error::external(
+                            "batch:syscall does not support the {args=, bufs=, ptrs=} \
+                         table form; use vm:syscall outside the batch, or pass bare \
+                         integer args here",
+                        ));
+                    }
+                }
+                let mut padded = [0i64; 6];
+                for (slot, value) in padded.iter_mut().zip(args.iter()) {
+                    *slot = match value {
+                        Value::Integer(n) => *n,
+                        Value::Number(n) => *n as i64,
+                        _ => 0,
+                    };
+                }
+                this.push(provium_protocol::wire::HostMessage::Syscall(
+                    provium_protocol::wire::SyscallArgs {
+                        nr,
+                        args: padded,
+                        bufs: Vec::new(),
+                        ptrs: Vec::new(),
+                        nested: Vec::new(),
+                    },
                 ));
                 Ok(())
             },
         );
-        methods.add_method("syscall", |_, this, (nr, args): (i64, mlua::Variadic<Value>)| {
-            // Reject the table form `vm:syscall(nr, {args=, bufs=,
-            // ptrs=})` with a clear pointer rather than silently
-            // dropping bufs/ptrs. The non-batch path supports it
-            // via build_syscall_args; the batch form would need
-            // its own parsing pass plus per-item buffer return
-            // shape that isn't implemented yet.
-            if args.len() == 1 {
-                if let Some(Value::Table(_)) = args.get(0) {
-                    return Err(mlua::Error::external(
-                        "batch:syscall does not support the {args=, bufs=, ptrs=} \
-                         table form; use vm:syscall outside the batch, or pass bare \
-                         integer args here",
-                    ));
-                }
-            }
-            let mut padded = [0i64; 6];
-            for (slot, value) in padded.iter_mut().zip(args.iter()) {
-                *slot = match value {
-                    Value::Integer(n) => *n,
-                    Value::Number(n) => *n as i64,
-                    _ => 0,
-                };
-            }
-            this.push(provium_protocol::wire::HostMessage::Syscall(
-                provium_protocol::wire::SyscallArgs {
-                    nr,
-                    args: padded,
-                    bufs: Vec::new(),
-                    ptrs: Vec::new(),
-                    nested: Vec::new(),
-                },
-            ));
-            Ok(())
-        });
     }
 }
 
@@ -1106,7 +1083,10 @@ fn batch_response_to_lua(
             set_ok(&entry, Value::Table(t))
         }
         AgentMessage::AgentError(e) => set_err(&entry, e.to_string()),
-        other => set_err(&entry, format!("unexpected batch response: {}", other.kind())),
+        other => set_err(
+            &entry,
+            format!("unexpected batch response: {}", other.kind()),
+        ),
     }
 }
 
@@ -1132,10 +1112,7 @@ fn parse_disk_size(s: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("size `{s}` overflows u64"))
 }
 
-fn parse_boot_overrides(
-    t: &mlua::Table,
-    vm: &crate::vm::Vm,
-) -> mlua::Result<crate::vmm::BootOpts> {
+fn parse_boot_overrides(t: &mlua::Table, vm: &crate::vm::Vm) -> mlua::Result<crate::vmm::BootOpts> {
     let mut opts = crate::vmm::BootOpts::default();
     if let Ok(cmdline) = t.get::<String>("kernel_cmdline") {
         opts.cmdline_override = Some(cmdline);
@@ -1153,7 +1130,7 @@ fn parse_boot_overrides(
     match t.get::<Value>("initial_time") {
         Ok(Value::Nil) => {}
         Ok(Value::Integer(secs)) => {
-            opts.initial_time_ns = Some((secs as i64).saturating_mul(1_000_000_000));
+            opts.initial_time_ns = Some(secs.saturating_mul(1_000_000_000));
         }
         Ok(Value::Number(secs)) => {
             if !secs.is_finite() {
@@ -1263,13 +1240,9 @@ fn parse_boot_overrides(
                 }
                 (_, scratch, _) => {
                     let size = match scratch {
-                        Value::String(s) => {
-                            parse_disk_size(s.to_str()?.as_ref()).map_err(|e| {
-                                mlua::Error::external(format!(
-                                    "boot_opts.disks: disk `{id}`: {e}"
-                                ))
-                            })?
-                        }
+                        Value::String(s) => parse_disk_size(s.to_str()?.as_ref()).map_err(|e| {
+                            mlua::Error::external(format!("boot_opts.disks: disk `{id}`: {e}"))
+                        })?,
                         Value::Integer(n) if *n > 0 => *n as u64,
                         other => {
                             return Err(mlua::Error::external(format!(
@@ -1365,8 +1338,7 @@ fn build_exec_args(args: &mlua::Variadic<Value>) -> Result<ExecArgs, String> {
     // We detect by looking for any non-array key (env/cwd/stdin/etc.)
     // — a pure array is the legacy direct-exec args form.
     let mut direct_exec_args: Option<Vec<String>> = None;
-    let mut env: std::collections::BTreeMap<String, String> =
-        std::collections::BTreeMap::new();
+    let mut env: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     let mut env_clear = false;
     let mut cwd: Option<String> = None;
     let mut stdin_bytes: Vec<u8> = Vec::new();
@@ -1513,10 +1485,7 @@ fn open_mode_from_table(t: &mlua::Table) -> mlua::Result<OpenMode> {
 ///    so their source field reads as a string chunk (no `@`).
 /// 3. Otherwise return the raw path; `std::fs` resolves it against
 ///    cwd.
-fn resolve_caller_relative(
-    lua: &mlua::Lua,
-    raw: &str,
-) -> mlua::Result<std::path::PathBuf> {
+fn resolve_caller_relative(lua: &mlua::Lua, raw: &str) -> mlua::Result<std::path::PathBuf> {
     let p = std::path::Path::new(raw);
     if p.is_absolute() {
         return Ok(p.to_path_buf());
@@ -1524,8 +1493,7 @@ fn resolve_caller_relative(
     if let Ok(debug) = lua.globals().get::<mlua::Table>("debug") {
         if let Ok(getinfo) = debug.get::<mlua::Function>("getinfo") {
             for level in 1..16 {
-                let info: Option<mlua::Table> =
-                    getinfo.call((level, "S")).ok();
+                let info: Option<mlua::Table> = getinfo.call((level, "S")).ok();
                 let Some(info) = info else { break };
                 let source: Option<String> = info.get("source").ok();
                 if let Some(s) = source {
@@ -1589,11 +1557,7 @@ fn generate_snapshot_tempfile_path() -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!(
-        "provium-snap-{}-{}.bin",
-        std::process::id(),
-        id
-    ))
+    std::env::temp_dir().join(format!("provium-snap-{}-{}.bin", std::process::id(), id))
 }
 
 // ---------------------------------------------------------------------
@@ -1601,11 +1565,18 @@ fn generate_snapshot_tempfile_path() -> std::path::PathBuf {
 // and `vm:syscall_async` (fire-now, await-later).
 // ---------------------------------------------------------------------
 
+// The tuple mirrors the wire operation; keep the argument parser's result named.
+type ParsedSyscall = (
+    i64,
+    [i64; 6],
+    Vec<Vec<u8>>,
+    Vec<u8>,
+    Vec<provium_protocol::wire::NestedPtr>,
+);
+
 /// Parse the `(nr, {args=…, bufs=…, ptrs=…, nested=…})` table form or
 /// the `(nr, a, b, …)` plain-int form into raw syscall arguments.
-fn parse_syscall_args(
-    args: &mlua::Variadic<Value>,
-) -> mlua::Result<(i64, [i64; 6], Vec<Vec<u8>>, Vec<u8>, Vec<provium_protocol::wire::NestedPtr>)> {
+fn parse_syscall_args(args: &mlua::Variadic<Value>) -> mlua::Result<ParsedSyscall> {
     let nr_v = args
         .first()
         .cloned()
@@ -1714,12 +1685,10 @@ impl UserData for PendingSyscallUd {
         // pending:await() — block for the in-flight syscall's result,
         // returning the same table shape as vm:syscall.
         methods.add_method("await", |lua, this, ()| {
-            let pending = this
-                .pending
-                .lock()
-                .unwrap()
-                .take()
-                .ok_or_else(|| mlua::Error::external("syscall_async: handle already awaited"))?;
+            let pending =
+                this.pending.lock().unwrap().take().ok_or_else(|| {
+                    mlua::Error::external("syscall_async: handle already awaited")
+                })?;
             let r = pending.finish().map_err(mlua::Error::external)?;
             syscall_result_table(lua, r.ret, r.errno, r.out_bufs)
         });
@@ -1745,14 +1714,9 @@ impl PendingWorkerSyscallUd {
 impl UserData for PendingWorkerSyscallUd {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("await", |lua, this, ()| {
-            let pending = this
-                .pending
-                .lock()
-                .unwrap()
-                .take()
-                .ok_or_else(|| {
-                    mlua::Error::external("worker:syscall_async: handle already awaited")
-                })?;
+            let pending = this.pending.lock().unwrap().take().ok_or_else(|| {
+                mlua::Error::external("worker:syscall_async: handle already awaited")
+            })?;
             let r = pending.finish().map_err(mlua::Error::external)?;
             syscall_result_table(lua, r.ret, r.errno, r.out_bufs)
         });

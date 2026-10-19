@@ -12,9 +12,7 @@ use provium_protocol::events::{
     Event, FixtureBuildDone, FixtureBuildStarted, FixtureBuildWaiting, FixtureCacheHit,
 };
 
-use crate::fixture::{
-    self, canonical_profile_paths_all, default_cache_dir, CacheEntryPaths,
-};
+use crate::fixture::{self, canonical_profile_paths_all, default_cache_dir, CacheEntryPaths};
 use crate::lab::Lab;
 use crate::profile::Config;
 use crate::scheduler::events::EventSink;
@@ -44,11 +42,7 @@ pub(crate) fn install_provium_global(lua: &Lua, ctx: LuaContext) -> mlua::Result
 /// The runner uses this to push a per-test scope: VMs created inside
 /// a `test()` body land in `local_lab` and are torn down at test end,
 /// while lookups still find file-scope resources via `parents`.
-pub(crate) fn scoped_lab_ud(
-    local_lab: Lab,
-    parents: Vec<Lab>,
-    ctx: &LuaContext,
-) -> LabUd {
+pub(crate) fn scoped_lab_ud(local_lab: Lab, parents: Vec<Lab>, ctx: &LuaContext) -> LabUd {
     LabUd {
         lab: local_lab,
         parent_chain: parents,
@@ -133,81 +127,74 @@ impl UserData for LabUd {
         //   lab:vm("name")              → lookup
         //   lab:vm("name", "profile")   → create
         // ---------------------------------------------------------------
-        methods.add_method(
-            "vm",
-            |lua, this, args: mlua::Variadic<Value>| {
-                match args.len() {
-                    1 => {
-                        // Lookup form. Walks the parent chain so
-                        // test-scope code can find file-scope VMs.
-                        let name = arg_string(&args[0], "name")?;
-                        let vm = this.lookup_vm(&name).ok_or_else(|| {
-                            mlua::Error::external(
-                                crate::lab::LabError::UnknownVm(name.clone()),
-                            )
-                        })?;
-                        Ok(Value::UserData(
-                            lua.create_userdata(VmUd::wrap(vm))?,
-                        ))
-                    }
-                    2 | 3 => {
-                        // Create form: (name, profile, opts?)
-                        let name = arg_string(&args[0], "name")?;
-                        let profile_name = arg_string(&args[1], "profile")?;
-                        let boot_opts = match args.get(2) {
-                            None | Some(Value::Nil) => BootOpts::default(),
-                            Some(Value::Table(t)) => parse_boot_opts(t)?,
-                            Some(other) => {
-                                return Err(mlua::Error::external(format!(
-                                    "lab:vm: opts must be a table, got {}",
-                                    other.type_name()
-                                )));
-                            }
-                        };
-                        // Refuse to shadow a parent-scope name. Without
-                        // this check, `provium:vm("foo", "p")` inside
-                        // a test() body when a file-scope "foo" exists
-                        // silently creates a second VM that lookup
-                        // would never reach (the local one wins by
-                        // construction). Surface the conflict so
-                        // authors pick a different name or reuse the
-                        // file-scope VM via the 1-arg lookup form.
-                        for parent in &this.parent_chain {
-                            if parent.get_vm(&name).is_ok() {
-                                return Err(mlua::Error::external(format!(
-                                    "provium:vm({name:?}, …): name already declared at \
+        methods.add_method("vm", |lua, this, args: mlua::Variadic<Value>| {
+            match args.len() {
+                1 => {
+                    // Lookup form. Walks the parent chain so
+                    // test-scope code can find file-scope VMs.
+                    let name = arg_string(&args[0], "name")?;
+                    let vm = this.lookup_vm(&name).ok_or_else(|| {
+                        mlua::Error::external(crate::lab::LabError::UnknownVm(name.clone()))
+                    })?;
+                    Ok(Value::UserData(lua.create_userdata(VmUd::wrap(vm))?))
+                }
+                2 | 3 => {
+                    // Create form: (name, profile, opts?)
+                    let name = arg_string(&args[0], "name")?;
+                    let profile_name = arg_string(&args[1], "profile")?;
+                    let boot_opts = match args.get(2) {
+                        None | Some(Value::Nil) => BootOpts::default(),
+                        Some(Value::Table(t)) => parse_boot_opts(t)?,
+                        Some(other) => {
+                            return Err(mlua::Error::external(format!(
+                                "lab:vm: opts must be a table, got {}",
+                                other.type_name()
+                            )));
+                        }
+                    };
+                    // Refuse to shadow a parent-scope name. Without
+                    // this check, `provium:vm("foo", "p")` inside
+                    // a test() body when a file-scope "foo" exists
+                    // silently creates a second VM that lookup
+                    // would never reach (the local one wins by
+                    // construction). Surface the conflict so
+                    // authors pick a different name or reuse the
+                    // file-scope VM via the 1-arg lookup form.
+                    for parent in &this.parent_chain {
+                        if parent.get_vm(&name).is_ok() {
+                            return Err(mlua::Error::external(format!(
+                                "provium:vm({name:?}, …): name already declared at \
                                      a parent scope (lab `{}`). Pick a different name, \
                                      or use `provium:vm({name:?})` to reuse the \
                                      parent-scope VM.",
-                                    parent.name(),
-                                )));
-                            }
+                                parent.name(),
+                            )));
                         }
-                        let memory_bytes = boot_opts.memory_bytes.unwrap_or(0);
-                        let _cpus = boot_opts.cpus.unwrap_or(0);
-                        let vm = this
-                            .lab
-                            .create_vm(name.clone(), profile_name.clone(), boot_opts)
-                            .map_err(mlua::Error::external)?;
-                        let ud = super::result_ud::register_resource(
-                            lua,
-                            VmUd::wrap_with_events_and_meta(
-                                vm,
-                                Arc::clone(&this.events),
-                                this.lab.name().to_owned(),
-                                profile_name,
-                                memory_bytes,
-                            ),
-                            "vm",
-                        )?;
-                        Ok(Value::UserData(ud))
                     }
-                    n => Err(mlua::Error::external(format!(
-                        "lab:vm: expected 1, 2, or 3 args, got {n}"
-                    ))),
+                    let memory_bytes = boot_opts.memory_bytes.unwrap_or(0);
+                    let _cpus = boot_opts.cpus.unwrap_or(0);
+                    let vm = this
+                        .lab
+                        .create_vm(name.clone(), profile_name.clone(), boot_opts)
+                        .map_err(mlua::Error::external)?;
+                    let ud = super::result_ud::register_resource(
+                        lua,
+                        VmUd::wrap_with_events_and_meta(
+                            vm,
+                            Arc::clone(&this.events),
+                            this.lab.name().to_owned(),
+                            profile_name,
+                            memory_bytes,
+                        ),
+                        "vm",
+                    )?;
+                    Ok(Value::UserData(ud))
                 }
-            },
-        );
+                n => Err(mlua::Error::external(format!(
+                    "lab:vm: expected 1, 2, or 3 args, got {n}"
+                ))),
+            }
+        });
 
         // `lab.<name>` sugar — same as `lab:vm("name")` for declared
         // VMs, falls through to `lab:bridge("name")` for bridges,
@@ -226,10 +213,7 @@ impl UserData for LabUd {
         methods.add_meta_method(
             MetaMethod::NewIndex,
             |lua, _this, (key, value): (String, Value)| {
-                const FILE_SCOPE_KEYS: &[&str] = &[
-                    "reset_between_tests",
-                    "timeout",
-                ];
+                const FILE_SCOPE_KEYS: &[&str] = &["reset_between_tests", "timeout"];
                 if !FILE_SCOPE_KEYS.contains(&key.as_str()) {
                     return Err(mlua::Error::external(format!(
                         "cannot set `provium.{key}`: not a recognised \
@@ -237,108 +221,94 @@ impl UserData for LabUd {
                         FILE_SCOPE_KEYS.join(", "),
                     )));
                 }
-                let config: mlua::Table = match lua
-                    .globals()
-                    .get::<mlua::Table>("_provium_file_config")
-                {
-                    Ok(t) => t,
-                    Err(_) => {
-                        let t = lua.create_table()?;
-                        lua.globals().set("_provium_file_config", t.clone())?;
-                        t
-                    }
-                };
+                let config: mlua::Table =
+                    match lua.globals().get::<mlua::Table>("_provium_file_config") {
+                        Ok(t) => t,
+                        Err(_) => {
+                            let t = lua.create_table()?;
+                            lua.globals().set("_provium_file_config", t.clone())?;
+                            t
+                        }
+                    };
                 config.set(key, value)?;
                 Ok(())
             },
         );
 
-        methods.add_meta_method(
-            MetaMethod::Index,
-            |lua, this, key: String| {
-                // Reserved-key checks come FIRST so a sub-lab or
-                // resource named "vm_fixture" / "lab_fixture" /
-                // "pack" / "unpack" can't shadow the API. (R6 #2:
-                // sub-lab lookup at the same priority as named
-                // resources let those names hijack the dot-call
-                // sugar.)
-                if key == "pack" || key == "unpack" {
-                    let string_lib: mlua::Table = lua.globals().get("string")?;
-                    return string_lib.get::<Value>(key.as_str());
+        methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
+            // Reserved-key checks come FIRST so a sub-lab or
+            // resource named "vm_fixture" / "lab_fixture" /
+            // "pack" / "unpack" can't shadow the API. (R6 #2:
+            // sub-lab lookup at the same priority as named
+            // resources let those names hijack the dot-call
+            // sugar.)
+            if key == "pack" || key == "unpack" {
+                let string_lib: mlua::Table = lua.globals().get("string")?;
+                return string_lib.get::<Value>(key.as_str());
+            }
+            // File-scope config read-back so `provium.timeout`
+            // returns whatever was assigned earlier in the chunk.
+            if key == "reset_between_tests" || key == "timeout" {
+                if let Ok(config) = lua.globals().get::<mlua::Table>("_provium_file_config") {
+                    return config.get::<Value>(key.as_str());
                 }
-                // File-scope config read-back so `provium.timeout`
-                // returns whatever was assigned earlier in the chunk.
-                if key == "reset_between_tests" || key == "timeout" {
-                    if let Ok(config) = lua
-                        .globals()
-                        .get::<mlua::Table>("_provium_file_config")
-                    {
-                        return config.get::<Value>(key.as_str());
-                    }
-                    return Ok(Value::Nil);
-                }
-                if key == "vm_fixture" {
-                    // Fixtures land at file root (bottom of the
-                    // parent chain) so the materialised VM survives
-                    // past the current test's scope and the cache
-                    // pays off across tests.
-                    let lab_clone = this.clone();
-                    let f = lua.create_function(
-                        move |_, name: String| {
-                            let mut for_fixture = lab_clone.clone();
-                            for_fixture.lab = lab_clone.fixture_lab().clone();
-                            for_fixture.parent_chain = Vec::new();
-                            let vm = build_or_resume_fixture(&for_fixture, &name)
-                                .map_err(|e| mlua::Error::external(e.to_string()))?;
-                            Ok(VmUd::wrap(vm))
-                        },
-                    )?;
-                    return Ok(Value::Function(f));
-                }
-                if key == "lab_fixture" {
-                    let lab_clone = this.clone();
-                    let f = lua.create_function(
-                        move |_, name: String| {
-                            let mut for_fixture = lab_clone.clone();
-                            for_fixture.lab = lab_clone.fixture_lab().clone();
-                            for_fixture.parent_chain = Vec::new();
-                            let lab = build_or_resume_lab_fixture(&for_fixture, &name)
-                                .map_err(mlua::Error::external)?;
-                            Ok(LabUd {
-                                lab,
-                                parent_chain: Vec::new(),
-                                config: Arc::clone(&lab_clone.config),
-                                vmm: Arc::clone(&lab_clone.vmm),
-                                events: Arc::clone(&lab_clone.events),
-                                pool: lab_clone.pool.clone(),
-                            })
-                        },
-                    )?;
-                    return Ok(Value::Function(f));
-                }
-                if let Some(vm) = this.lookup_vm(&key) {
-                    return Ok(Value::UserData(
-                        lua.create_userdata(VmUd::wrap(vm))?,
-                    ));
-                }
-                if let Some(bridge) = this.lookup_bridge(&key) {
-                    return Ok(Value::UserData(
-                        lua.create_userdata(BridgeUd::wrap(bridge))?,
-                    ));
-                }
-                if let Some(sub) = this.lookup_sub_lab(&key) {
-                    return Ok(Value::UserData(lua.create_userdata(LabUd {
-                        lab: sub,
+                return Ok(Value::Nil);
+            }
+            if key == "vm_fixture" {
+                // Fixtures land at file root (bottom of the
+                // parent chain) so the materialised VM survives
+                // past the current test's scope and the cache
+                // pays off across tests.
+                let lab_clone = this.clone();
+                let f = lua.create_function(move |_, name: String| {
+                    let mut for_fixture = lab_clone.clone();
+                    for_fixture.lab = lab_clone.fixture_lab().clone();
+                    for_fixture.parent_chain = Vec::new();
+                    let vm = build_or_resume_fixture(&for_fixture, &name)
+                        .map_err(|e| mlua::Error::external(e.to_string()))?;
+                    Ok(VmUd::wrap(vm))
+                })?;
+                return Ok(Value::Function(f));
+            }
+            if key == "lab_fixture" {
+                let lab_clone = this.clone();
+                let f = lua.create_function(move |_, name: String| {
+                    let mut for_fixture = lab_clone.clone();
+                    for_fixture.lab = lab_clone.fixture_lab().clone();
+                    for_fixture.parent_chain = Vec::new();
+                    let lab = build_or_resume_lab_fixture(&for_fixture, &name)
+                        .map_err(mlua::Error::external)?;
+                    Ok(LabUd {
+                        lab,
                         parent_chain: Vec::new(),
-                        config: Arc::clone(&this.config),
-                        vmm: Arc::clone(&this.vmm),
-                        events: Arc::clone(&this.events),
-                        pool: this.pool.clone(),
-                    })?));
-                }
-                Ok(Value::Nil)
-            },
-        );
+                        config: Arc::clone(&lab_clone.config),
+                        vmm: Arc::clone(&lab_clone.vmm),
+                        events: Arc::clone(&lab_clone.events),
+                        pool: lab_clone.pool.clone(),
+                    })
+                })?;
+                return Ok(Value::Function(f));
+            }
+            if let Some(vm) = this.lookup_vm(&key) {
+                return Ok(Value::UserData(lua.create_userdata(VmUd::wrap(vm))?));
+            }
+            if let Some(bridge) = this.lookup_bridge(&key) {
+                return Ok(Value::UserData(
+                    lua.create_userdata(BridgeUd::wrap(bridge))?,
+                ));
+            }
+            if let Some(sub) = this.lookup_sub_lab(&key) {
+                return Ok(Value::UserData(lua.create_userdata(LabUd {
+                    lab: sub,
+                    parent_chain: Vec::new(),
+                    config: Arc::clone(&this.config),
+                    vmm: Arc::clone(&this.vmm),
+                    events: Arc::clone(&this.events),
+                    pool: this.pool.clone(),
+                })?));
+            }
+            Ok(Value::Nil)
+        });
 
         // ---------------------------------------------------------------
         // Bridges:
@@ -347,8 +317,9 @@ impl UserData for LabUd {
         //                                 form; PEI-1312)
         //   lab:bridge("name", opts?)   → create
         // ---------------------------------------------------------------
-        methods.add_method("bridge", |lua, this, args: mlua::Variadic<Value>| {
-            match args.len() {
+        methods.add_method(
+            "bridge",
+            |lua, this, args: mlua::Variadic<Value>| match args.len() {
                 1 => {
                     let name = arg_string(&args[0], "name")?;
                     if let Some(bridge) = this.lookup_bridge(&name) {
@@ -360,11 +331,8 @@ impl UserData for LabUd {
                         .lab
                         .create_bridge(name)
                         .map_err(mlua::Error::external)?;
-                    let ud = super::result_ud::register_resource(
-                        lua,
-                        BridgeUd::wrap(bridge),
-                        "bridge",
-                    )?;
+                    let ud =
+                        super::result_ud::register_resource(lua, BridgeUd::wrap(bridge), "bridge")?;
                     Ok(Value::UserData(ud))
                 }
                 2 | 3 => {
@@ -384,53 +352,46 @@ impl UserData for LabUd {
                         .lab
                         .create_bridge(name)
                         .map_err(mlua::Error::external)?;
-                    let ud = super::result_ud::register_resource(
-                        lua,
-                        BridgeUd::wrap(bridge),
-                        "bridge",
-                    )?;
+                    let ud =
+                        super::result_ud::register_resource(lua, BridgeUd::wrap(bridge), "bridge")?;
                     Ok(Value::UserData(ud))
                 }
                 n => Err(mlua::Error::external(format!(
                     "lab:bridge: expected 1, 2, or 3 args, got {n}"
                 ))),
-            }
-        });
+            },
+        );
 
         methods.add_method("bridge_names", |_, this, ()| Ok(this.lab.bridge_names()));
 
         // ---------------------------------------------------------------
         // Sub-labs
         // ---------------------------------------------------------------
-        methods.add_method(
-            "lab",
-            |_, this, name: Option<String>| {
-                let chosen =
-                    name.unwrap_or_else(|| auto_sub_lab_name(&this.lab));
-                for parent in &this.parent_chain {
-                    if parent.get_sub_lab(&chosen).is_some() {
-                        return Err(mlua::Error::external(format!(
-                            "provium:lab({chosen:?}): sub-lab name already \
+        methods.add_method("lab", |_, this, name: Option<String>| {
+            let chosen = name.unwrap_or_else(|| auto_sub_lab_name(&this.lab));
+            for parent in &this.parent_chain {
+                if parent.get_sub_lab(&chosen).is_some() {
+                    return Err(mlua::Error::external(format!(
+                        "provium:lab({chosen:?}): sub-lab name already \
                              declared at a parent scope (lab `{}`). Pick a \
                              different name.",
-                            parent.name(),
-                        )));
-                    }
+                        parent.name(),
+                    )));
                 }
-                let sub = this
-                    .lab
-                    .sub_lab_checked(chosen)
-                    .map_err(mlua::Error::external)?;
-                Ok(LabUd {
-                    lab: sub,
-                    parent_chain: Vec::new(),
-                    config: Arc::clone(&this.config),
-                    vmm: Arc::clone(&this.vmm),
-                    events: Arc::clone(&this.events),
-                    pool: this.pool.clone(),
-                })
-            },
-        );
+            }
+            let sub = this
+                .lab
+                .sub_lab_checked(chosen)
+                .map_err(mlua::Error::external)?;
+            Ok(LabUd {
+                lab: sub,
+                parent_chain: Vec::new(),
+                config: Arc::clone(&this.config),
+                vmm: Arc::clone(&this.vmm),
+                events: Arc::clone(&this.events),
+                pool: this.pool.clone(),
+            })
+        });
 
         // ---------------------------------------------------------------
         // Fixtures
@@ -492,22 +453,16 @@ impl UserData for LabUd {
         // Introspection
         // ---------------------------------------------------------------
         // Binary helpers. Re-exports of Lua 5.4 string.pack / unpack.
-        methods.add_method(
-            "pack",
-            |lua, _this, args: mlua::Variadic<Value>| {
-                let string_table: mlua::Table = lua.globals().get("string")?;
-                let pack: mlua::Function = string_table.get("pack")?;
-                pack.call::<Value>(args)
-            },
-        );
-        methods.add_method(
-            "unpack",
-            |lua, _this, args: mlua::Variadic<Value>| {
-                let string_table: mlua::Table = lua.globals().get("string")?;
-                let unpack: mlua::Function = string_table.get("unpack")?;
-                unpack.call::<mlua::MultiValue>(args)
-            },
-        );
+        methods.add_method("pack", |lua, _this, args: mlua::Variadic<Value>| {
+            let string_table: mlua::Table = lua.globals().get("string")?;
+            let pack: mlua::Function = string_table.get("pack")?;
+            pack.call::<Value>(args)
+        });
+        methods.add_method("unpack", |lua, _this, args: mlua::Variadic<Value>| {
+            let string_table: mlua::Table = lua.globals().get("string")?;
+            let unpack: mlua::Function = string_table.get("unpack")?;
+            unpack.call::<mlua::MultiValue>(args)
+        });
         // `provium.lab_fixture` — like vm_fixture but the builder
         // returns a `provium:snapshot()` (whole-lab snapshot, no
         // dir arg) instead of a `vm:snapshot()`. The cached entry
@@ -517,8 +472,8 @@ impl UserData for LabUd {
             let mut for_fixture = this.clone();
             for_fixture.lab = this.fixture_lab().clone();
             for_fixture.parent_chain = Vec::new();
-            let lab = build_or_resume_lab_fixture(&for_fixture, &name)
-                .map_err(mlua::Error::external)?;
+            let lab =
+                build_or_resume_lab_fixture(&for_fixture, &name).map_err(mlua::Error::external)?;
             Ok(LabUd {
                 lab,
                 parent_chain: Vec::new(),
@@ -578,26 +533,20 @@ impl UserData for LabUd {
                     let bridge = b.clone_bridge();
                     let n = bridge.name().to_owned();
                     shadow_check(parents, "bridge", &n)?;
-                    return lab
-                        .include_bridge(bridge)
-                        .map_err(mlua::Error::external);
+                    return lab.include_bridge(bridge).map_err(mlua::Error::external);
                 }
                 if let Ok(sub) = ud.borrow::<super::lab_ud::LabUd>() {
                     let sublab = sub.lab.clone();
                     let n = sublab.name().to_owned();
                     shadow_check(parents, "sub-lab", &n)?;
-                    return lab
-                        .include_sub_lab(sublab)
-                        .map_err(mlua::Error::external);
+                    return lab.include_sub_lab(sublab).map_err(mlua::Error::external);
                 }
                 Err(mlua::Error::external(
                     "lab:include: expected vm, bridge, or lab userdata",
                 ))
             }
             match value {
-                Value::UserData(u) => {
-                    include_one(&this.lab, &this.parent_chain, &u)
-                }
+                Value::UserData(u) => include_one(&this.lab, &this.parent_chain, &u),
                 Value::Table(t) => {
                     for pair in t.sequence_values::<Value>() {
                         let v = pair?;
@@ -680,24 +629,18 @@ impl UserData for LabUd {
         // shape). Without args the snapshot writes to a fresh
         // tempdir and returns a [`LabSnapshotUd`] — the form a
         // lab fixture builder returns.
-        methods.add_method("snapshot", |lua, this, dir: Option<String>| {
-            match dir {
-                Some(d) => {
-                    this.lab
-                        .lab_snapshot(std::path::Path::new(&d))
-                        .map_err(mlua::Error::external)?;
-                    Ok(Value::String(lua.create_string(&d)?))
-                }
-                None => {
-                    let td = tempfile::tempdir()
-                        .map_err(mlua::Error::external)?
-                        .keep();
-                    this.lab
-                        .lab_snapshot(&td)
-                        .map_err(mlua::Error::external)?;
-                    let ud = super::lab_snapshot_ud::LabSnapshotUd { dir: td };
-                    Ok(Value::UserData(lua.create_userdata(ud)?))
-                }
+        methods.add_method("snapshot", |lua, this, dir: Option<String>| match dir {
+            Some(d) => {
+                this.lab
+                    .lab_snapshot(std::path::Path::new(&d))
+                    .map_err(mlua::Error::external)?;
+                Ok(Value::String(lua.create_string(&d)?))
+            }
+            None => {
+                let td = tempfile::tempdir().map_err(mlua::Error::external)?.keep();
+                this.lab.lab_snapshot(&td).map_err(mlua::Error::external)?;
+                let ud = super::lab_snapshot_ud::LabSnapshotUd { dir: td };
+                Ok(Value::UserData(lua.create_userdata(ud)?))
             }
         });
         methods.add_method("restore", |_, this, arg: Value| {
@@ -708,15 +651,17 @@ impl UserData for LabUd {
             // string form stays for tests that load snapshots
             // off disk by path.
             let dir: std::path::PathBuf = match arg {
-                Value::String(s) => std::path::PathBuf::from(
-                    s.to_str().map_err(mlua::Error::external)?.to_string(),
-                ),
+                Value::String(s) => {
+                    std::path::PathBuf::from(s.to_str().map_err(mlua::Error::external)?.to_string())
+                }
                 Value::UserData(ud) => {
                     let snap = ud
                         .borrow::<super::lab_snapshot_ud::LabSnapshotUd>()
-                        .map_err(|_| mlua::Error::external(
-                            "lab:restore: expected lab snapshot userdata or directory string",
-                        ))?;
+                        .map_err(|_| {
+                            mlua::Error::external(
+                                "lab:restore: expected lab snapshot userdata or directory string",
+                            )
+                        })?;
                     snap.dir.clone()
                 }
                 other => {
@@ -727,13 +672,10 @@ impl UserData for LabUd {
                 }
             };
             let meta_path = dir.join("lab.json");
-            let body = std::fs::read_to_string(&meta_path)
-                .map_err(mlua::Error::external)?;
+            let body = std::fs::read_to_string(&meta_path).map_err(mlua::Error::external)?;
             let meta: crate::lab::LabSnapshotMeta =
                 serde_json::from_str(&body).map_err(|e| mlua::Error::external(e.to_string()))?;
-            this.lab
-                .lab_restore(&meta)
-                .map_err(mlua::Error::external)?;
+            this.lab.lab_restore(&meta).map_err(mlua::Error::external)?;
             Ok(())
         });
 
@@ -746,9 +688,7 @@ impl UserData for LabUd {
             let amount = parse_resource_amount(&opts)?;
             let Some(pool) = this.pool.as_ref() else {
                 // No pool — still enforce one-shot per design.
-                this.lab
-                    .note_claim_taken()
-                    .map_err(mlua::Error::external)?;
+                this.lab.note_claim_taken().map_err(mlua::Error::external)?;
                 return Ok(());
             };
             this.lab
@@ -767,28 +707,27 @@ impl UserData for LabUd {
         });
 
         // barrier(name, count, timeout?)
-        methods.add_method(
-            "barrier",
-            |_, this, args: mlua::Variadic<Value>| {
-                let name = match args.first() {
-                    Some(Value::String(s)) => s.to_str().map_err(|e| e.to_string())
-                        .map_err(mlua::Error::external)?
-                        .to_string(),
-                    _ => return Err(mlua::Error::external("barrier: name must be a string")),
-                };
-                let count = match args.get(1) {
-                    Some(Value::Integer(n)) => *n as usize,
-                    _ => return Err(mlua::Error::external("barrier: count must be int")),
-                };
-                let timeout = match args.get(2) {
-                    Some(Value::Number(s)) => std::time::Duration::from_secs_f64(*s),
-                    Some(Value::Integer(s)) => std::time::Duration::from_secs(*s as u64),
-                    None | Some(Value::Nil) => std::time::Duration::from_secs(60),
-                    _ => return Err(mlua::Error::external("barrier: timeout must be number")),
-                };
-                Ok(this.lab.barrier(&name, count, timeout))
-            },
-        );
+        methods.add_method("barrier", |_, this, args: mlua::Variadic<Value>| {
+            let name = match args.first() {
+                Some(Value::String(s)) => s
+                    .to_str()
+                    .map_err(|e| e.to_string())
+                    .map_err(mlua::Error::external)?
+                    .to_string(),
+                _ => return Err(mlua::Error::external("barrier: name must be a string")),
+            };
+            let count = match args.get(1) {
+                Some(Value::Integer(n)) => *n as usize,
+                _ => return Err(mlua::Error::external("barrier: count must be int")),
+            };
+            let timeout = match args.get(2) {
+                Some(Value::Number(s)) => std::time::Duration::from_secs_f64(*s),
+                Some(Value::Integer(s)) => std::time::Duration::from_secs(*s as u64),
+                None | Some(Value::Nil) => std::time::Duration::from_secs(60),
+                _ => return Err(mlua::Error::external("barrier: timeout must be number")),
+            };
+            Ok(this.lab.barrier(&name, count, timeout))
+        });
 
         methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
             Ok(format!(
@@ -802,7 +741,11 @@ impl UserData for LabUd {
 
 fn arg_string(v: &Value, what: &str) -> mlua::Result<String> {
     match v {
-        Value::String(s) => Ok(s.to_str().map_err(|e| e.to_string()).map_err(mlua::Error::external)?.to_string()),
+        Value::String(s) => Ok(s
+            .to_str()
+            .map_err(|e| e.to_string())
+            .map_err(mlua::Error::external)?
+            .to_string()),
         other => Err(mlua::Error::external(format!(
             "lab:vm: {what} must be a string, got {}",
             other.type_name()
@@ -816,9 +759,10 @@ fn parse_boot_opts(t: &mlua::Table) -> mlua::Result<BootOpts> {
 
     let memory_bytes = match memory {
         None | Some(Value::Nil) => None,
-        Some(Value::Integer(n)) => Some(u64::try_from(n).map_err(|_| {
-            mlua::Error::external("opts.memory: negative or overflowing value")
-        })?),
+        Some(Value::Integer(n)) => Some(
+            u64::try_from(n)
+                .map_err(|_| mlua::Error::external("opts.memory: negative or overflowing value"))?,
+        ),
         Some(Value::String(s)) => {
             let owned = s
                 .to_str()
@@ -872,10 +816,7 @@ fn parse_resource_amount(t: &mlua::Table) -> mlua::Result<crate::scheduler::Reso
             )))
         }
     };
-    Ok(crate::scheduler::ResourceAmount {
-        memory_bytes,
-        cpus,
-    })
+    Ok(crate::scheduler::ResourceAmount { memory_bytes, cpus })
 }
 
 fn parse_memory_string(s: &str) -> mlua::Result<u64> {
@@ -888,9 +829,9 @@ fn parse_memory_string(s: &str) -> mlua::Result<u64> {
         Some('G') | Some('g') => (&s[..s.len() - 1], 1024 * 1024 * 1024),
         _ => (s, 1),
     };
-    let n: u64 = num_part.parse().map_err(|_| {
-        mlua::Error::external(format!("opts.memory: cannot parse `{s}`"))
-    })?;
+    let n: u64 = num_part
+        .parse()
+        .map_err(|_| mlua::Error::external(format!("opts.memory: cannot parse `{s}`")))?;
     Ok(n * multiplier)
 }
 
@@ -956,9 +897,10 @@ fn resolve_dep_keys(
                 break;
             }
         }
-        let Some(helper_path) = helper_path else { continue };
-        let Ok(helper_source) = crate::fixture::read_fixture_source(&helper_path)
-        else {
+        let Some(helper_path) = helper_path else {
+            continue;
+        };
+        let Ok(helper_source) = crate::fixture::read_fixture_source(&helper_path) else {
             continue;
         };
         let nested = resolve_dep_keys(roots, &helper_source, seen)?;
@@ -1068,7 +1010,9 @@ fn collect_external_deps(
                 break;
             }
         }
-        let Some(helper_path) = helper_path else { continue };
+        let Some(helper_path) = helper_path else {
+            continue;
+        };
         let Ok(helper_source) = crate::fixture::read_fixture_source(&helper_path) else {
             continue;
         };
@@ -1080,75 +1024,6 @@ fn collect_external_deps(
     }
 }
 
-#[cfg(test)]
-mod external_dep_tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn resolves_relative_against_fixture_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let fix_dir = tmp.path().join("tests/fixtures");
-        fs::create_dir_all(&fix_dir).unwrap();
-        let fix = fix_dir.join("base.fixture.lua");
-        // External file lives at `tests/bin/foo`, referenced
-        // relative to fixture dir as `../bin/foo`.
-        let bin_dir = tmp.path().join("tests/bin");
-        fs::create_dir_all(&bin_dir).unwrap();
-        let bin = bin_dir.join("foo");
-        fs::write(&bin, b"hello").unwrap();
-        fs::write(
-            &fix,
-            r#"vm:push_file("../bin/foo", "/usr/bin/foo")"#,
-        )
-        .unwrap();
-        let source = fs::read(&fix).unwrap();
-        let roots = vec![tmp.path().join("tests").to_string_lossy().into_owned()];
-        let out = resolve_external_deps_pub(&roots, &fix, &source);
-        assert_eq!(out.len(), 1, "got {:?}", out);
-        // canonicalize follows symlinks, so just check the file
-        // it resolves to ends with "bin/foo".
-        assert!(
-            out[0].ends_with("bin/foo"),
-            "expected path ending in bin/foo, got {:?}",
-            out[0]
-        );
-    }
-
-    #[test]
-    fn dedupes_repeated_paths() {
-        let tmp = tempfile::tempdir().unwrap();
-        let fix = tmp.path().join("a.fixture.lua");
-        let bin = tmp.path().join("foo");
-        fs::write(&bin, b"x").unwrap();
-        fs::write(
-            &fix,
-            r#"
-                vm:push_file("foo", "/a")
-                lab:depends_on_file("foo")
-            "#,
-        )
-        .unwrap();
-        let source = fs::read(&fix).unwrap();
-        let out = resolve_external_deps_pub(&[], &fix, &source);
-        assert_eq!(out.len(), 1);
-    }
-
-    #[test]
-    fn opt_out_is_excluded() {
-        let tmp = tempfile::tempdir().unwrap();
-        let fix = tmp.path().join("a.fixture.lua");
-        fs::write(
-            &fix,
-            r#"vm:push_file("foo", "/a", {auto_dep = false})"#,
-        )
-        .unwrap();
-        let source = fs::read(&fix).unwrap();
-        let out = resolve_external_deps_pub(&[], &fix, &source);
-        assert!(out.is_empty(), "got {:?}", out);
-    }
-}
-
 /// Resolve a lab fixture into a sub-Lab. Cache layout differs from
 /// the single-VM case: snapshot lives under `<key>.lab/` directory
 /// containing `lab.json` + per-VM `.snap` files.
@@ -1156,16 +1031,14 @@ fn build_or_resume_lab_fixture(
     this: &LabUd,
     fixture_name: &str,
 ) -> Result<crate::lab::Lab, String> {
-    let fixture_path = locate_fixture(&this.config.provium.roots, fixture_name)
-        .map_err(|e| e.to_string())?;
+    let fixture_path =
+        locate_fixture(&this.config.provium.roots, fixture_name).map_err(|e| e.to_string())?;
     let source = fixture::read_fixture_source(&fixture_path).map_err(|e| e.to_string())?;
-    let dep_keys =
-        resolve_dep_keys(&this.config.provium.roots, &source, &mut Vec::new())?;
+    let dep_keys = resolve_dep_keys(&this.config.provium.roots, &source, &mut Vec::new())?;
     let (kernels, initrds) = canonical_profile_paths_all(&this.config);
     let kernel_refs: Vec<&std::path::Path> = kernels.iter().map(|p| p.as_path()).collect();
     let initrd_refs: Vec<&std::path::Path> = initrds.iter().map(|p| p.as_path()).collect();
-    let externals =
-        resolve_external_deps_pub(&this.config.provium.roots, &fixture_path, &source);
+    let externals = resolve_external_deps_pub(&this.config.provium.roots, &fixture_path, &source);
     let external_refs: Vec<&std::path::Path> = externals.iter().map(|p| p.as_path()).collect();
     let key = fixture::compute_key_with_deps_kernels_and_externals(
         &source,
@@ -1224,16 +1097,14 @@ fn build_or_resume_lab_fixture(
     // had already finished.
     let fixture_for_event = fixture_name.to_owned();
     let events_for_event = this.events.clone();
-    let (_lock, was_contended) = crate::fixture::acquire_build_lock_observed_notify(
-        &lock_path,
-        move |holder| {
+    let (_lock, was_contended) =
+        crate::fixture::acquire_build_lock_observed_notify(&lock_path, move |holder| {
             events_for_event.emit(Event::FixtureBuildWaiting(FixtureBuildWaiting {
                 path: fixture_for_event,
                 held_by_file: holder.unwrap_or_default(),
             }));
-        },
-    )
-    .map_err(|e| e.to_string())?;
+        })
+        .map_err(|e| e.to_string())?;
     // Now that we hold the lock, re-evaluate whether the corrupt
     // entry is still corrupt — a peer may have replaced it with a
     // good copy while we were queuing.
@@ -1257,8 +1128,7 @@ fn build_or_resume_lab_fixture(
         if was_contended {
             this.events.emit(Event::FixtureBuildDone(FixtureBuildDone {
                 path: fixture_name.to_owned(),
-                duration_ns: u64::try_from(wait_started.elapsed().as_nanos())
-                    .unwrap_or(u64::MAX),
+                duration_ns: u64::try_from(wait_started.elapsed().as_nanos()).unwrap_or(u64::MAX),
                 snapshot_bytes: dir_size_bytes(&lab_dir),
             }));
         }
@@ -1267,9 +1137,10 @@ fn build_or_resume_lab_fixture(
         return Ok(lab);
     }
 
-    this.events.emit(Event::FixtureBuildStarted(FixtureBuildStarted {
-        path: fixture_name.to_owned(),
-    }));
+    this.events
+        .emit(Event::FixtureBuildStarted(FixtureBuildStarted {
+            path: fixture_name.to_owned(),
+        }));
     let build_started = std::time::Instant::now();
 
     let outcome = crate::lua::fixture_build::build_fixture(
@@ -1298,8 +1169,7 @@ fn build_or_resume_lab_fixture(
 
     this.events.emit(Event::FixtureBuildDone(FixtureBuildDone {
         path: fixture_name.to_owned(),
-        duration_ns: u64::try_from(build_started.elapsed().as_nanos())
-            .unwrap_or(u64::MAX),
+        duration_ns: u64::try_from(build_started.elapsed().as_nanos()).unwrap_or(u64::MAX),
         snapshot_bytes: dir_size_bytes(&lab_dir),
     }));
 
@@ -1368,7 +1238,10 @@ fn atomic_install_lab_dir(
     // where neither name resolves shrinks to a single rename.
     let stale = lab_dir.with_file_name(format!(
         "{}.stale.{}",
-        lab_dir.file_name().and_then(|s| s.to_str()).unwrap_or("lab"),
+        lab_dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("lab"),
         std::process::id(),
     ));
     std::fs::rename(lab_dir, &stale)?;
@@ -1383,8 +1256,7 @@ fn restore_lab_from_dir(
     fixture_name: &str,
     dir: &std::path::Path,
 ) -> Result<crate::lab::Lab, String> {
-    let body = std::fs::read_to_string(dir.join("lab.json"))
-        .map_err(|e| e.to_string())?;
+    let body = std::fs::read_to_string(dir.join("lab.json")).map_err(|e| e.to_string())?;
     let meta: crate::lab::LabSnapshotMeta =
         serde_json::from_str(&body).map_err(|e| e.to_string())?;
     let sub = this
@@ -1407,16 +1279,14 @@ fn build_or_resume_fixture(this: &LabUd, fixture_name: &str) -> Result<crate::vm
     //    invalidates derivatives — `DESIGN.md` § Fixtures /
     //    Dependency tracking.
     let source = fixture::read_fixture_source(&fixture_path).map_err(|e| e.to_string())?;
-    let dep_keys =
-        resolve_dep_keys(&this.config.provium.roots, &source, &mut Vec::new())?;
+    let dep_keys = resolve_dep_keys(&this.config.provium.roots, &source, &mut Vec::new())?;
     // Fold in kernel/initrd identifiers for ALL profiles so a
     // kernel-image swap on any profile invalidates the cache, per
     // `DESIGN.md` § Fixtures.
     let (kernels, initrds) = canonical_profile_paths_all(&this.config);
     let kernel_refs: Vec<&std::path::Path> = kernels.iter().map(|p| p.as_path()).collect();
     let initrd_refs: Vec<&std::path::Path> = initrds.iter().map(|p| p.as_path()).collect();
-    let externals =
-        resolve_external_deps_pub(&this.config.provium.roots, &fixture_path, &source);
+    let externals = resolve_external_deps_pub(&this.config.provium.roots, &fixture_path, &source);
     let external_refs: Vec<&std::path::Path> = externals.iter().map(|p| p.as_path()).collect();
     let key = fixture::compute_key_with_deps_kernels_and_externals(
         &source,
@@ -1504,16 +1374,14 @@ fn build_or_resume_fixture(this: &LabUd, fixture_name: &str) -> Result<crate::vm
     let wait_started = std::time::Instant::now();
     let fixture_for_event = fixture_name.to_owned();
     let events_for_event = this.events.clone();
-    let (_lock, was_contended) = crate::fixture::acquire_build_lock_observed_notify(
-        &entry.lock,
-        move |holder| {
+    let (_lock, was_contended) =
+        crate::fixture::acquire_build_lock_observed_notify(&entry.lock, move |holder| {
             events_for_event.emit(Event::FixtureBuildWaiting(FixtureBuildWaiting {
                 path: fixture_for_event,
                 held_by_file: holder.unwrap_or_default(),
             }));
-        },
-    )
-    .map_err(|e| e.to_string())?;
+        })
+        .map_err(|e| e.to_string())?;
     // Re-check after acquiring — another process may have built
     // the fixture while we were queuing. The two paths below each
     // emit AT MOST ONE FixtureBuildDone (paired with either the
@@ -1522,9 +1390,10 @@ fn build_or_resume_fixture(this: &LabUd, fixture_name: &str) -> Result<crate::vm
     // the regression that produced double events.
     if !entry.snapshot.is_file() {
         // Cache miss inside the lock — we own the build.
-        this.events.emit(Event::FixtureBuildStarted(FixtureBuildStarted {
-            path: fixture_name.to_owned(),
-        }));
+        this.events
+            .emit(Event::FixtureBuildStarted(FixtureBuildStarted {
+                path: fixture_name.to_owned(),
+            }));
         let build_started = std::time::Instant::now();
         let outcome = super::fixture_build::build_fixture(
             &fixture_path,
@@ -1549,14 +1418,12 @@ fn build_or_resume_fixture(this: &LabUd, fixture_name: &str) -> Result<crate::vm
             let _ = std::fs::rename(&zst_path, &entry.snapshot);
             let _ = std::fs::remove_file(&snapshot_path);
         } else if std::fs::rename(&snapshot_path, &entry.snapshot).is_err() {
-            std::fs::copy(&snapshot_path, &entry.snapshot)
-                .map_err(|e| e.to_string())?;
+            std::fs::copy(&snapshot_path, &entry.snapshot).map_err(|e| e.to_string())?;
             let _ = std::fs::remove_file(&snapshot_path);
         }
         this.events.emit(Event::FixtureBuildDone(FixtureBuildDone {
             path: fixture_name.to_owned(),
-            duration_ns: u64::try_from(build_started.elapsed().as_nanos())
-                .unwrap_or(u64::MAX),
+            duration_ns: u64::try_from(build_started.elapsed().as_nanos()).unwrap_or(u64::MAX),
             snapshot_bytes: std::fs::metadata(&entry.snapshot)
                 .map(|m| m.len())
                 .unwrap_or(0),
@@ -1566,8 +1433,7 @@ fn build_or_resume_fixture(this: &LabUd, fixture_name: &str) -> Result<crate::vm
         // Waiting with a Done so consumers see a balanced sequence.
         this.events.emit(Event::FixtureBuildDone(FixtureBuildDone {
             path: fixture_name.to_owned(),
-            duration_ns: u64::try_from(wait_started.elapsed().as_nanos())
-                .unwrap_or(u64::MAX),
+            duration_ns: u64::try_from(wait_started.elapsed().as_nanos()).unwrap_or(u64::MAX),
             snapshot_bytes: std::fs::metadata(&entry.snapshot)
                 .map(|m| m.len())
                 .unwrap_or(0),
@@ -1577,14 +1443,12 @@ fn build_or_resume_fixture(this: &LabUd, fixture_name: &str) -> Result<crate::vm
     // a peer did.
     let restore_path = if crate::perf::looks_zstd(&entry.snapshot) {
         let tmp = fixture::unique_restore_scratch();
-        crate::perf::decompress_zst(&entry.snapshot, &tmp)
-            .map_err(|e| e.to_string())?;
+        crate::perf::decompress_zst(&entry.snapshot, &tmp).map_err(|e| e.to_string())?;
         tmp
     } else {
         entry.snapshot.clone()
     };
-    let vm = restore_into_lab(this, fixture_name, &restore_path)
-        .map_err(|e| e.to_string())?;
+    let vm = restore_into_lab(this, fixture_name, &restore_path).map_err(|e| e.to_string())?;
     if restore_path != entry.snapshot {
         let _ = std::fs::remove_file(&restore_path);
     }
@@ -1593,12 +1457,8 @@ fn build_or_resume_fixture(this: &LabUd, fixture_name: &str) -> Result<crate::vm
     Ok(vm)
 }
 
-
 /// Look up `<root>/<name>.fixture.lua` across configured test roots.
-fn locate_fixture(
-    roots: &[String],
-    name: &str,
-) -> Result<PathBuf, fixture::FixtureError> {
+fn locate_fixture(roots: &[String], name: &str) -> Result<PathBuf, fixture::FixtureError> {
     let candidates = if roots.is_empty() {
         // No roots configured — try the current directory.
         vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))]
@@ -1667,4 +1527,65 @@ fn auto_sub_lab_name(parent: &Lab) -> String {
     // graph; slice 7 will.
     let existing = parent.sub_lab_names().len();
     format!("__lab_{}", existing)
+}
+
+#[cfg(test)]
+mod external_dep_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn resolves_relative_against_fixture_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fix_dir = tmp.path().join("tests/fixtures");
+        fs::create_dir_all(&fix_dir).unwrap();
+        let fix = fix_dir.join("base.fixture.lua");
+        // External file lives at `tests/bin/foo`, referenced
+        // relative to fixture dir as `../bin/foo`.
+        let bin_dir = tmp.path().join("tests/bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let bin = bin_dir.join("foo");
+        fs::write(&bin, b"hello").unwrap();
+        fs::write(&fix, r#"vm:push_file("../bin/foo", "/usr/bin/foo")"#).unwrap();
+        let source = fs::read(&fix).unwrap();
+        let roots = vec![tmp.path().join("tests").to_string_lossy().into_owned()];
+        let out = resolve_external_deps_pub(&roots, &fix, &source);
+        assert_eq!(out.len(), 1, "got {:?}", out);
+        // canonicalize follows symlinks, so just check the file
+        // it resolves to ends with "bin/foo".
+        assert!(
+            out[0].ends_with("bin/foo"),
+            "expected path ending in bin/foo, got {:?}",
+            out[0]
+        );
+    }
+
+    #[test]
+    fn dedupes_repeated_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fix = tmp.path().join("a.fixture.lua");
+        let bin = tmp.path().join("foo");
+        fs::write(&bin, b"x").unwrap();
+        fs::write(
+            &fix,
+            r#"
+                vm:push_file("foo", "/a")
+                lab:depends_on_file("foo")
+            "#,
+        )
+        .unwrap();
+        let source = fs::read(&fix).unwrap();
+        let out = resolve_external_deps_pub(&[], &fix, &source);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn opt_out_is_excluded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fix = tmp.path().join("a.fixture.lua");
+        fs::write(&fix, r#"vm:push_file("foo", "/a", {auto_dep = false})"#).unwrap();
+        let source = fs::read(&fix).unwrap();
+        let out = resolve_external_deps_pub(&[], &fix, &source);
+        assert!(out.is_empty(), "got {:?}", out);
+    }
 }

@@ -26,7 +26,8 @@ fn cfg_dir() -> tempfile::TempDir {
     std::fs::write(
         dir.path().join("dummy.test.lua"),
         "test('x', function(t) end)",
-    ).unwrap();
+    )
+    .unwrap();
     dir
 }
 
@@ -36,15 +37,19 @@ fn invalid_mem_value_errors_cleanly() {
     let cfg = dir.path().join("provium.toml");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
-        .arg("--mem").arg("not-a-size")
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--mem")
+        .arg("not-a-size")
         .arg(dir.path())
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "bad --mem must fail");
-    assert!(stderr.contains("size") || stderr.contains("parse"),
-        "stderr must explain bad size: `{stderr}`");
+    assert!(
+        stderr.contains("size") || stderr.contains("parse"),
+        "stderr must explain bad size: `{stderr}`"
+    );
 }
 
 #[test]
@@ -53,15 +58,20 @@ fn mem_with_g_suffix_accepted() {
     let cfg = dir.path().join("provium.toml");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
-        .arg("--mem").arg("4G")
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--mem")
+        .arg("4G")
         .arg(dir.path())
         .output()
         .unwrap();
     // No test files → exit clean. Failure here means parse
     // rejected `4G`.
-    assert!(out.status.success(), "`--mem 4G` must parse: stderr=`{}`",
-        String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "`--mem 4G` must parse: stderr=`{}`",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -70,8 +80,10 @@ fn mem_with_m_suffix_accepted() {
     let cfg = dir.path().join("provium.toml");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
-        .arg("--mem").arg("512M")
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--mem")
+        .arg("512M")
         .arg(dir.path())
         .output()
         .unwrap();
@@ -84,8 +96,10 @@ fn mem_lowercase_suffix_accepted() {
     let cfg = dir.path().join("provium.toml");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
-        .arg("--mem").arg("4g")
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--mem")
+        .arg("4g")
         .arg(dir.path())
         .output()
         .unwrap();
@@ -98,8 +112,10 @@ fn mem_plain_integer_accepted_as_bytes() {
     let cfg = dir.path().join("provium.toml");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
-        .arg("--mem").arg("536870912")  // 512 MiB
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--mem")
+        .arg("536870912") // 512 MiB
         .arg(dir.path())
         .output()
         .unwrap();
@@ -112,14 +128,17 @@ fn mem_overflow_fails_cleanly() {
     let cfg = dir.path().join("provium.toml");
     let out = Command::new(provium_bin())
         .arg("--no-preflight")
-        .arg("--config").arg(&cfg)
-        .arg("--mem").arg("16777216T")  // 16 EiB × 1024 = overflow
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--mem")
+        .arg("16777216T") // 16 EiB × 1024 = overflow
         .arg(dir.path())
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "overflow must fail");
-    assert!(stderr.contains("overflow") || stderr.contains("u64")
-        || stderr.contains("size"),
-        "stderr must explain overflow: `{stderr}`");
+    assert!(
+        stderr.contains("overflow") || stderr.contains("u64") || stderr.contains("size"),
+        "stderr must explain overflow: `{stderr}`"
+    );
 }

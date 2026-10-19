@@ -24,7 +24,6 @@ use crate::connector::{AgentStream, Connector};
 use crate::profile::Profile;
 use crate::vmm::{Backend, BootOpts, BootSummary, VmInstance, VmRunning, Vmm, VmmError};
 
-
 /// VMM that spawns an in-process agent thread per connection. See the
 /// module-level docs.
 #[derive(Debug)]

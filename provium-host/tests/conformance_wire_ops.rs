@@ -4,8 +4,8 @@
 
 use provium_protocol::handle::FileHandle;
 use provium_protocol::wire::{
-    CloseArgs, OpResult, OpenFileArgs, OpenMode, ReadArgs, ReadFileArgs,
-    WriteArgs, WriteFileArgs, WriteFileMode,
+    CloseArgs, OpResult, OpenFileArgs, OpenMode, ReadArgs, ReadFileArgs, WriteArgs, WriteFileArgs,
+    WriteFileMode,
 };
 use provium_protocol::OsError;
 
@@ -22,8 +22,12 @@ fn open_file_args_round_trip() {
     let a = OpenFileArgs {
         path: "/tmp/x".into(),
         mode: OpenMode {
-            read: true, write: false, create: false,
-            truncate: false, append: false, exclusive: false,
+            read: true,
+            write: false,
+            create: false,
+            truncate: false,
+            append: false,
+            exclusive: false,
         },
         create_perm: Some(0o644),
     };
@@ -35,28 +39,38 @@ fn open_file_args_round_trip() {
 
 #[test]
 fn read_args_round_trip() {
-    let a = ReadArgs { handle: FileHandle::new(42), max_bytes: 4096 };
+    let a = ReadArgs {
+        handle: FileHandle::new(42),
+        max_bytes: 4096,
+    };
     let b = round_trip(&a);
     assert_eq!(a, b);
 }
 
 #[test]
 fn write_args_round_trip() {
-    let a = WriteArgs { handle: FileHandle::new(7), data: vec![1, 2, 3] };
+    let a = WriteArgs {
+        handle: FileHandle::new(7),
+        data: vec![1, 2, 3],
+    };
     let b = round_trip(&a);
     assert_eq!(a, b);
 }
 
 #[test]
 fn close_args_round_trip() {
-    let a = CloseArgs { handle: FileHandle::new(99) };
+    let a = CloseArgs {
+        handle: FileHandle::new(99),
+    };
     let b = round_trip(&a);
     assert_eq!(a, b);
 }
 
 #[test]
 fn read_file_args_round_trip() {
-    let a = ReadFileArgs { path: "/etc/passwd".into() };
+    let a = ReadFileArgs {
+        path: "/etc/passwd".into(),
+    };
     let b = round_trip(&a);
     assert_eq!(a, b);
 }
@@ -100,11 +114,17 @@ fn op_result_serializes_with_outcome_tag() {
     let a: OpResult<u32> = OpResult::Ok(7);
     let bytes = rmp_serde::to_vec_named(&a).unwrap();
     let needle_outcome = b"outcome";
-    let needle_ok = b"\xa2ok";  // msgpack fixstr "ok" (2 chars)
-    assert!(bytes.windows(needle_outcome.len()).any(|w| w == needle_outcome),
-        "outcome tag missing");
-    assert!(bytes.windows(needle_ok.len()).any(|w| w == needle_ok),
-        "ok variant tag missing");
+    let needle_ok = b"\xa2ok"; // msgpack fixstr "ok" (2 chars)
+    assert!(
+        bytes
+            .windows(needle_outcome.len())
+            .any(|w| w == needle_outcome),
+        "outcome tag missing"
+    );
+    assert!(
+        bytes.windows(needle_ok.len()).any(|w| w == needle_ok),
+        "ok variant tag missing"
+    );
 }
 
 #[test]
@@ -125,8 +145,10 @@ fn op_result_into_result_converts() {
 #[test]
 fn open_mode_default_is_zero_access() {
     let m = OpenMode::default();
-    assert!(!m.read && !m.write && !m.append,
-        "OpenMode default must have no access bits set");
+    assert!(
+        !m.read && !m.write && !m.append,
+        "OpenMode default must have no access bits set"
+    );
 }
 
 #[test]

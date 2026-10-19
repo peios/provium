@@ -164,9 +164,11 @@ fn run_or_skip(source: &str) -> Option<FileOutcome> {
     }
     std::fs::write(
         &path,
-        source.replace("{profile}", &profile)
+        source
+            .replace("{profile}", &profile)
             .replace("{disk_image}", &disk_image.to_string_lossy()),
-    ).unwrap();
+    )
+    .unwrap();
 
     let vmm: Arc<dyn Vmm> = Arc::new(QemuVmm::new());
     Some(run_file(&path, config, vmm).expect("running the test file"))
@@ -187,7 +189,8 @@ fn assert_all_passed(outcome: &FileOutcome) {
 
 #[test]
 fn suspend_query_distinguishes_running_from_host_pause() {
-    let Some(outcome) = run_or_skip(r#"
+    let Some(outcome) = run_or_skip(
+        r#"
 test("query suspend state without changing lifecycle", function(t)
     local vm = provium:vm("query-suspend", "{profile}"):boot()
     t:assert_eq(vm:is_suspended(), false)
@@ -200,7 +203,10 @@ test("query suspend state without changing lifecycle", function(t)
     local closed, why = pcall(vm.is_suspended, vm)
     t:assert(not closed and tostring(why):find("shutdown"), tostring(why))
 end)
-"#) else { return; };
+"#,
+    ) else {
+        return;
+    };
     assert_all_passed(&outcome);
 }
 

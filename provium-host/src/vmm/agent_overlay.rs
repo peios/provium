@@ -144,10 +144,7 @@ pub fn prepare_initrd(
         ))
     })?;
     let overlay_bytes = fs::read(&overlay).map_err(|e| {
-        VmmError::AgentOverlay(format!(
-            "read overlay `{}`: {e}",
-            overlay.display()
-        ))
+        VmmError::AgentOverlay(format!("read overlay `{}`: {e}", overlay.display()))
     })?;
 
     let mut hasher = Sha256::new();
@@ -157,10 +154,7 @@ pub fn prepare_initrd(
 
     let cache_dir = cache_root.join("agent-overlay-cache");
     fs::create_dir_all(&cache_dir).map_err(|e| {
-        VmmError::AgentOverlay(format!(
-            "create cache dir `{}`: {e}",
-            cache_dir.display()
-        ))
+        VmmError::AgentOverlay(format!("create cache dir `{}`: {e}", cache_dir.display()))
     })?;
     let merged_path = cache_dir.join(format!("{key}.cpio.gz"));
 
@@ -174,22 +168,14 @@ pub fn prepare_initrd(
         // two writers could interleave on one file (PEI-1118).
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = cache_dir.join(format!(
-            ".{key}.{}.{seq}.partial",
-            std::process::id()
-        ));
+        let tmp = cache_dir.join(format!(".{key}.{}.{seq}.partial", std::process::id()));
         let mut f = fs::File::create(&tmp).map_err(|e| {
-            VmmError::AgentOverlay(format!(
-                "create cache file `{}`: {e}",
-                tmp.display()
-            ))
+            VmmError::AgentOverlay(format!("create cache file `{}`: {e}", tmp.display()))
         })?;
-        f.write_all(&user_bytes).map_err(|e| {
-            VmmError::AgentOverlay(format!("write merged initrd: {e}"))
-        })?;
-        f.write_all(&overlay_bytes).map_err(|e| {
-            VmmError::AgentOverlay(format!("write merged initrd: {e}"))
-        })?;
+        f.write_all(&user_bytes)
+            .map_err(|e| VmmError::AgentOverlay(format!("write merged initrd: {e}")))?;
+        f.write_all(&overlay_bytes)
+            .map_err(|e| VmmError::AgentOverlay(format!("write merged initrd: {e}")))?;
         drop(f);
         if let Err(e) = fs::rename(&tmp, &merged_path) {
             // A sibling that finished first has installed a complete
@@ -304,12 +290,8 @@ mod tests {
         let initrd = dir.path().join("user.cpio.gz");
         std::fs::write(&initrd, b"USER").unwrap();
         let profile = tmp_profile(initrd, true);
-        let err = prepare_initrd(
-            &profile,
-            "rdinit=/different/init console=hvc0",
-            dir.path(),
-        )
-        .unwrap_err();
+        let err = prepare_initrd(&profile, "rdinit=/different/init console=hvc0", dir.path())
+            .unwrap_err();
         match err {
             VmmError::AgentOverlay(msg) => assert!(msg.contains("rdinit=")),
             other => panic!("expected AgentOverlay, got {other:?}"),

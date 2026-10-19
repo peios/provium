@@ -137,10 +137,7 @@ pub fn compute_key(fixture_source: &[u8]) -> CacheKey {
 /// fixtures into the digest. Per `DESIGN.md` § Fixtures /
 /// Dependency tracking — rebuilding a parent invalidates every
 /// derivative.
-pub fn compute_key_with_deps(
-    fixture_source: &[u8],
-    dep_keys: &[CacheKey],
-) -> CacheKey {
+pub fn compute_key_with_deps(fixture_source: &[u8], dep_keys: &[CacheKey]) -> CacheKey {
     compute_key_with_deps_and_kernel(fixture_source, dep_keys, None, None)
 }
 
@@ -166,9 +163,7 @@ pub fn compute_key_with_deps_and_kernel(
 ) -> CacheKey {
     let kernels: Vec<&Path> = kernel.into_iter().collect();
     let initrds: Vec<&Path> = initrd.into_iter().collect();
-    compute_key_with_deps_and_kernels(
-        fixture_source, dep_keys, &kernels, &initrds,
-    )
+    compute_key_with_deps_and_kernels(fixture_source, dep_keys, &kernels, &initrds)
 }
 
 /// Multi-profile variant of [`compute_key_with_deps_and_kernel`].
@@ -185,13 +180,7 @@ pub fn compute_key_with_deps_and_kernels(
     kernels: &[&Path],
     initrds: &[&Path],
 ) -> CacheKey {
-    compute_key_with_deps_kernels_and_externals(
-        fixture_source,
-        dep_keys,
-        kernels,
-        initrds,
-        &[],
-    )
+    compute_key_with_deps_kernels_and_externals(fixture_source, dep_keys, kernels, initrds, &[])
 }
 
 /// Full-form cache key that also folds external host-file
@@ -287,11 +276,7 @@ fn scan_quoted_arg(source: &str, marker: &str, out: &mut Vec<String>) {
 /// Like [`scan_quoted_arg`] but also records the absolute byte
 /// offset of each marker hit so callers can stable-sort across
 /// multiple markers and recover true source order.
-fn scan_quoted_arg_with_pos(
-    source: &str,
-    marker: &str,
-    out: &mut Vec<(usize, String)>,
-) {
+fn scan_quoted_arg_with_pos(source: &str, marker: &str, out: &mut Vec<(usize, String)>) {
     let mut idx = 0;
     while let Some(found) = source[idx..].find(marker) {
         let abs = idx + found;
@@ -525,9 +510,7 @@ pub fn acquire_build_lock(path: &Path) -> Result<BuildLock, FixtureError> {
 /// held the lock and we waited. Used by the dispatcher to emit
 /// `fixture_build_waiting` only in the contended case per
 /// `DESIGN.md` § Failure mode catalogue / Fixture rebuild storm.
-pub fn acquire_build_lock_observed(
-    path: &Path,
-) -> Result<(BuildLock, bool), FixtureError> {
+pub fn acquire_build_lock_observed(path: &Path) -> Result<(BuildLock, bool), FixtureError> {
     acquire_build_lock_observed_notify(path, |_| {})
 }
 
@@ -741,10 +724,7 @@ pub fn evict_to(cache_dir: &Path, max_bytes: u64) -> io::Result<EvictionReport> 
             fs::remove_file(&entry.path)
         };
         if let Err(e) = r {
-            eprintln!(
-                "provium: evicting `{}` failed: {e}",
-                entry.path.display()
-            );
+            eprintln!("provium: evicting `{}` failed: {e}", entry.path.display());
             continue;
         }
         // Lockfile cleanup — for `<key>.snap` it's `<key>.lock`,
@@ -890,7 +870,10 @@ mod tests {
             vm:push_file("c", "/c")
         "#;
         let hits = scan_external_file_deps(src);
-        assert_eq!(hits, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(
+            hits,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
@@ -910,15 +893,11 @@ mod tests {
         let a = dir.path().join("a.bin");
         fs::write(&a, b"version-one").unwrap();
         let externals: Vec<&Path> = vec![a.as_path()];
-        let k1 = compute_key_with_deps_kernels_and_externals(
-            b"src", &[], &[], &[], &externals,
-        );
+        let k1 = compute_key_with_deps_kernels_and_externals(b"src", &[], &[], &[], &externals);
         // Bump mtime+content.
         std::thread::sleep(Duration::from_millis(15));
         fs::write(&a, b"version-two-longer").unwrap();
-        let k2 = compute_key_with_deps_kernels_and_externals(
-            b"src", &[], &[], &[], &externals,
-        );
+        let k2 = compute_key_with_deps_kernels_and_externals(b"src", &[], &[], &[], &externals);
         assert_ne!(k1, k2);
     }
 
@@ -929,18 +908,14 @@ mod tests {
         fs::write(&a, b"x").unwrap();
         let with =
             compute_key_with_deps_kernels_and_externals(b"src", &[], &[], &[], &[a.as_path()]);
-        let without =
-            compute_key_with_deps_kernels_and_externals(b"src", &[], &[], &[], &[]);
+        let without = compute_key_with_deps_kernels_and_externals(b"src", &[], &[], &[], &[]);
         assert_ne!(with, without);
     }
 
     #[test]
     fn cache_entry_paths_share_stem() {
         let dir = Path::new("/var/cache/provium");
-        let entry = CacheEntryPaths::for_key(
-            dir,
-            &CacheKey("deadbeef".into()),
-        );
+        let entry = CacheEntryPaths::for_key(dir, &CacheKey("deadbeef".into()));
         assert_eq!(
             entry.snapshot,
             PathBuf::from("/var/cache/provium/deadbeef.snap")

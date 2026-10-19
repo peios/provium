@@ -341,7 +341,10 @@ pub fn worker_wait(
     loop {
         let status = {
             let mut conn = conn.lock().unwrap();
-            relay(&mut conn, HostMessage::ProcStatus(ProcStatusArgs { handle: inner }))
+            relay(
+                &mut conn,
+                HostMessage::ProcStatus(ProcStatusArgs { handle: inner }),
+            )
         };
         match status {
             Ok(AgentMessage::ProcStatusResult(OpResult::Ok(ProcessLiveStatus::Running))) => {}
@@ -378,8 +381,8 @@ fn relay(conn: &mut WorkerConn, op: HostMessage) -> Result<AgentMessage, String>
     write_frame(&mut conn.control, &op, DEFAULT_MAX_FRAME_BYTES)
         .map_err(|e| format!("write: {e}"))?;
     conn.control.flush().map_err(|e| format!("flush: {e}"))?;
-    let resp: AgentMessage = read_frame(&mut conn.control, DEFAULT_MAX_FRAME_BYTES)
-        .map_err(|e| format!("read: {e}"))?;
+    let resp: AgentMessage =
+        read_frame(&mut conn.control, DEFAULT_MAX_FRAME_BYTES).map_err(|e| format!("read: {e}"))?;
     Ok(resp)
 }
 

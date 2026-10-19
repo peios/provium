@@ -63,8 +63,7 @@ impl CidAllocator {
     /// Peek at the next CID without allocating it. Test introspection
     /// only.
     pub fn peek(&self) -> u32 {
-        u32::try_from(self.next.load(Ordering::Relaxed))
-            .expect("vsock CID space exhausted (u32)")
+        u32::try_from(self.next.load(Ordering::Relaxed)).expect("vsock CID space exhausted (u32)")
     }
 }
 
@@ -128,7 +127,10 @@ mod tests {
                 got
             }));
         }
-        let mut all: Vec<u32> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
+        let mut all: Vec<u32> = handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect();
         all.sort_unstable();
         for w in all.windows(2) {
             assert_ne!(w[0], w[1], "duplicate CID allocated: {}", w[0]);

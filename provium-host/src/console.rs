@@ -20,8 +20,7 @@ use std::process::{Command, Stdio};
 
 use crate::profile::Config;
 use crate::vmm::qemu::{
-    build_interactive_qemu_command, InteractiveLaunchPlan, DEFAULT_CPUS,
-    DEFAULT_MEMORY_BYTES,
+    build_interactive_qemu_command, InteractiveLaunchPlan, DEFAULT_CPUS, DEFAULT_MEMORY_BYTES,
 };
 
 /// Options for one [`run`] invocation. Built from the `provium

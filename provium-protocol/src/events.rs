@@ -537,10 +537,7 @@ mod tests {
     #[test]
     fn meta_with_spec_key_round_trips() {
         let mut meta = MetaMap::new();
-        meta.insert(
-            "spec".into(),
-            MetaValue::Str("PSD-KACS §4.2.1.1".into()),
-        );
+        meta.insert("spec".into(), MetaValue::Str("PSD-KACS §4.2.1.1".into()));
         meta.insert(
             "tags".into(),
             MetaValue::Array(vec![MetaValue::Str("federation".into())]),

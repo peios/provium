@@ -36,11 +36,7 @@ impl UserData for BridgeUd {
             // setup. Two-phase: validate every element FIRST so
             // a partial-attach can't leave half the table wired
             // when element N+1 turns out to be a bad type.
-            fn commit_one(
-                bridge: &crate::bridge::Bridge,
-                v: &Value,
-                name: String,
-            ) {
+            fn commit_one(bridge: &crate::bridge::Bridge, v: &Value, name: String) {
                 bridge.attach(name);
                 if let Value::UserData(ud) = v {
                     if let Ok(vmud) = ud.borrow::<super::vm_ud::VmUd>() {
@@ -109,23 +105,30 @@ impl UserData for BridgeUd {
                     for v in t.clone().sequence_values::<Value>() {
                         let v = v?;
                         let n = match v {
-                            Value::String(s) => s.to_str().map(|s| s.to_string())
+                            Value::String(s) => s
+                                .to_str()
+                                .map(|s| s.to_string())
                                 .map_err(mlua::Error::external)?,
-                            Value::UserData(ud) => ud.borrow::<BridgeUd>()
+                            Value::UserData(ud) => ud
+                                .borrow::<BridgeUd>()
                                 .map(|b| b.bridge.name().to_string())
                                 .map_err(mlua::Error::external)?,
-                            _ => return Err(mlua::Error::external(
-                                "bridge:route: list entries must be bridge or string",
-                            )),
+                            _ => {
+                                return Err(mlua::Error::external(
+                                    "bridge:route: list entries must be bridge or string",
+                                ))
+                            }
                         };
                         this.bridge.route(&n);
                     }
                     warn_route_unimpl(this.bridge.name());
                     return Ok(());
                 }
-                _ => return Err(mlua::Error::external(
-                    "bridge:route: expected bridge|string|list",
-                )),
+                _ => {
+                    return Err(mlua::Error::external(
+                        "bridge:route: expected bridge|string|list",
+                    ))
+                }
             };
             this.bridge.route(&name);
             warn_route_unimpl(this.bridge.name());
@@ -191,48 +194,64 @@ impl UserData for BridgeUd {
         // (directional).
         methods.add_method("add_latency", |_, this, arg: Value| {
             let bridge = this.bridge.clone();
-            apply_impairment(arg, "add_latency", "ms", |ms| {
-                bridge.add_latency(ms);
-                Ok(())
-            }, |from, to, ms| {
-                // R9 reg-2: directional impairments install
-                // per-TAP netem qdiscs. Without an attachment
-                // check the rule lands on a non-existent TAP and
-                // silently does nothing — same footgun as
-                // partition_directional (R8 #399).
-                check_endpoints_attached(&bridge, &from, &to, "add_latency")?;
-                bridge.add_directional_latency(&from, &to, ms);
-                Ok(())
-            })
+            apply_impairment(
+                arg,
+                "add_latency",
+                "ms",
+                |ms| {
+                    bridge.add_latency(ms);
+                    Ok(())
+                },
+                |from, to, ms| {
+                    // R9 reg-2: directional impairments install
+                    // per-TAP netem qdiscs. Without an attachment
+                    // check the rule lands on a non-existent TAP and
+                    // silently does nothing — same footgun as
+                    // partition_directional (R8 #399).
+                    check_endpoints_attached(&bridge, &from, &to, "add_latency")?;
+                    bridge.add_directional_latency(&from, &to, ms);
+                    Ok(())
+                },
+            )
         });
         methods.add_method("drop_rate", |_, this, arg: Value| {
             let bridge = this.bridge.clone();
-            apply_impairment(arg, "drop_rate", "p", |pct| {
-                bridge.drop_rate(pct);
-                Ok(())
-            }, |from, to, pct| {
-                check_endpoints_attached(&bridge, &from, &to, "drop_rate")?;
-                bridge.directional_drop_rate(&from, &to, pct);
-                Ok(())
-            })
+            apply_impairment(
+                arg,
+                "drop_rate",
+                "p",
+                |pct| {
+                    bridge.drop_rate(pct);
+                    Ok(())
+                },
+                |from, to, pct| {
+                    check_endpoints_attached(&bridge, &from, &to, "drop_rate")?;
+                    bridge.directional_drop_rate(&from, &to, pct);
+                    Ok(())
+                },
+            )
         });
         methods.add_method("bandwidth_limit", |_, this, arg: Value| {
-            apply_bandwidth(arg, |bps| {
-                this.bridge.bandwidth_limit(bps);
-                Ok(())
-            }, |from, to, bps| {
-                // Directional bandwidth: HTB-root with one class on
-                // the source TAP, plus a netem child when latency
-                // or drop_rate is also set for the same source.
-                // Like directional latency/drop, the `to` argument
-                // is graph-recorded but the realization shapes
-                // *all* traffic leaving the source TAP — destinations
-                // can't be selected at the L2 bridge layer with HTB
-                // alone. See bridge.rs::set_directional_bandwidth
-                // for the worst-case-merge semantics.
-                this.bridge.set_directional_bandwidth(&from, &to, bps);
-                Ok(())
-            })
+            apply_bandwidth(
+                arg,
+                |bps| {
+                    this.bridge.bandwidth_limit(bps);
+                    Ok(())
+                },
+                |from, to, bps| {
+                    // Directional bandwidth: HTB-root with one class on
+                    // the source TAP, plus a netem child when latency
+                    // or drop_rate is also set for the same source.
+                    // Like directional latency/drop, the `to` argument
+                    // is graph-recorded but the realization shapes
+                    // *all* traffic leaving the source TAP — destinations
+                    // can't be selected at the L2 bridge layer with HTB
+                    // alone. See bridge.rs::set_directional_bandwidth
+                    // for the worst-case-merge semantics.
+                    this.bridge.set_directional_bandwidth(&from, &to, bps);
+                    Ok(())
+                },
+            )
         });
         methods.add_method("reset", |_, this, ()| {
             this.bridge.reset();
@@ -242,8 +261,12 @@ impl UserData for BridgeUd {
         // Introspection.
         methods.add_method("name", |_, this, ()| Ok(this.bridge.name().to_owned()));
         methods.add_method("latency_ms", |_, this, ()| Ok(this.bridge.latency_ms()));
-        methods.add_method("drop_rate_pct", |_, this, ()| Ok(this.bridge.drop_rate_pct()));
-        methods.add_method("bandwidth_bps", |_, this, ()| Ok(this.bridge.bandwidth_bps()));
+        methods.add_method("drop_rate_pct", |_, this, ()| {
+            Ok(this.bridge.drop_rate_pct())
+        });
+        methods.add_method("bandwidth_bps", |_, this, ()| {
+            Ok(this.bridge.bandwidth_bps())
+        });
 
         // Construct a NIC bound to (this bridge, vm). When `vm` is
         // a VM userdata we carry its handle through so link-state
@@ -269,11 +292,8 @@ impl UserData for BridgeUd {
         // the CAP_NET_ADMIN already required for the bridge itself).
         methods.add_method("capture", |lua, this, ()| {
             let site = super::result_ud::capture_creation_site(lua);
-            let stream = super::capture_ud::CaptureUd::spawn_with_guard(
-                &this.bridge,
-                site,
-            )
-            .map_err(mlua::Error::external)?;
+            let stream = super::capture_ud::CaptureUd::spawn_with_guard(&this.bridge, site)
+                .map_err(mlua::Error::external)?;
             super::result_ud::register_resource(lua, stream, "stream")
         });
 
@@ -284,7 +304,9 @@ impl UserData for BridgeUd {
             Ok(())
         });
         methods.add_method("disable_uplink", |_, this, ()| {
-            this.bridge.disable_uplink().map_err(mlua::Error::external)?;
+            this.bridge
+                .disable_uplink()
+                .map_err(mlua::Error::external)?;
             Ok(())
         });
 
@@ -307,32 +329,22 @@ impl UserData for BridgeUd {
         });
 
         // Directional impairments (already in Bridge struct).
-        methods.add_method(
-            "add_directional_latency",
-            |_, this, opts: mlua::Table| {
-                let from: String = opts.get("from")?;
-                let to: String = opts.get("to")?;
-                let ms: u32 = opts.get("ms")?;
-                check_endpoints_attached(
-                    &this.bridge, &from, &to, "add_directional_latency",
-                )?;
-                this.bridge.add_directional_latency(&from, &to, ms);
-                Ok(())
-            },
-        );
-        methods.add_method(
-            "directional_drop_rate",
-            |_, this, opts: mlua::Table| {
-                let from: String = opts.get("from")?;
-                let to: String = opts.get("to")?;
-                let pct: u32 = opts.get("p")?;
-                check_endpoints_attached(
-                    &this.bridge, &from, &to, "directional_drop_rate",
-                )?;
-                this.bridge.directional_drop_rate(&from, &to, pct);
-                Ok(())
-            },
-        );
+        methods.add_method("add_directional_latency", |_, this, opts: mlua::Table| {
+            let from: String = opts.get("from")?;
+            let to: String = opts.get("to")?;
+            let ms: u32 = opts.get("ms")?;
+            check_endpoints_attached(&this.bridge, &from, &to, "add_directional_latency")?;
+            this.bridge.add_directional_latency(&from, &to, ms);
+            Ok(())
+        });
+        methods.add_method("directional_drop_rate", |_, this, opts: mlua::Table| {
+            let from: String = opts.get("from")?;
+            let to: String = opts.get("to")?;
+            let pct: u32 = opts.get("p")?;
+            check_endpoints_attached(&this.bridge, &from, &to, "directional_drop_rate")?;
+            this.bridge.directional_drop_rate(&from, &to, pct);
+            Ok(())
+        });
 
         // Auto-close hook used by the resource-graph walker.
         // Tears down host-side networking; idempotent.
@@ -371,19 +383,13 @@ where
         Value::Number(n) if n >= 0.0 => whole(n as u32),
         Value::Table(t) => {
             let from: String = t.get("from").map_err(|_| {
-                mlua::Error::external(format!(
-                    "bridge:{op}: directional form needs `from`"
-                ))
+                mlua::Error::external(format!("bridge:{op}: directional form needs `from`"))
             })?;
             let to: String = t.get("to").map_err(|_| {
-                mlua::Error::external(format!(
-                    "bridge:{op}: directional form needs `to`"
-                ))
+                mlua::Error::external(format!("bridge:{op}: directional form needs `to`"))
             })?;
             let n: u32 = t.get(key).map_err(|_| {
-                mlua::Error::external(format!(
-                    "bridge:{op}: directional form needs `{key}`"
-                ))
+                mlua::Error::external(format!("bridge:{op}: directional form needs `{key}`"))
             })?;
             directional(from, to, n)
         }
@@ -430,12 +436,12 @@ fn parse_partition_args(
 ) -> mlua::Result<(String, String, bool)> {
     if args.len() == 1 {
         if let Value::Table(t) = &args[0] {
-            let a: String = t.get("from").map_err(|_| {
-                mlua::Error::external(format!("bridge:{op}: needs `from`"))
-            })?;
-            let b: String = t.get("to").map_err(|_| {
-                mlua::Error::external(format!("bridge:{op}: needs `to`"))
-            })?;
+            let a: String = t
+                .get("from")
+                .map_err(|_| mlua::Error::external(format!("bridge:{op}: needs `from`")))?;
+            let b: String = t
+                .get("to")
+                .map_err(|_| mlua::Error::external(format!("bridge:{op}: needs `to`")))?;
             return Ok((a, b, true));
         }
     }
@@ -474,13 +480,6 @@ fn vm_name_from_value(v: &Value) -> mlua::Result<String> {
     }
 }
 
-/// One-shot warning for `bridge:route` per bridge name. v1
-/// records the route in graph state but installs no nft
-/// forwarding rules — actual L3 reachability between bridge
-/// subnets is deferred (would need per-bridge subnet tracking
-/// + ip family forward rules). Print once so a test author
-/// notices at the call site rather than chasing silently
-/// dropped packets.
 /// Refuse partition / unpartition calls naming a VM that's
 /// not attached to this bridge. Without this guard the rule
 /// realises onto a non-existent TAP — silent no-op that the

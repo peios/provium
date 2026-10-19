@@ -27,8 +27,8 @@
 //! about overflow at the 256-file mark or accidentally interpret
 //! `failed_count == 2` as the internal-error sentinel.
 
-use std::path::PathBuf;
 use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -39,8 +39,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use provium_host::profile::Config;
 use provium_host::scheduler::{
-    dispatch_files_with_progress, run_preflight, DispatchOpts, EventSink, FileTimeout,
-    NullSink, Pool, ResourceAmount, WriteSink,
+    dispatch_files_with_progress, run_preflight, DispatchOpts, EventSink, FileTimeout, NullSink,
+    Pool, ResourceAmount, WriteSink,
 };
 use provium_host::vmm::local_agent::LocalAgentVmm;
 use provium_host::vmm::Vmm;
@@ -96,7 +96,7 @@ struct Args {
     no_tag_meta: Vec<(String, String)>,
 
     /// CPU oversubscription factor. `1.0` means "strict" (default
-    /// per design: total declared vCPUs ≤ host cores). Pass `1.5`
+    /// total declared vCPUs do not exceed host cores). Pass `1.5`
     /// or `2.0` to allow oversubscription if the workload tolerates
     /// scheduling jitter.
     #[arg(long, default_value = "1.0")]
@@ -121,8 +121,6 @@ struct Args {
 
     /// Per-file timeout. Accepts integer seconds or a duration
     /// string (`"10m"`, `"30s"`, `"500ms"`). `0` disables.
-    /// R9 mat-M2: was `u64` only — DESIGN documents `--timeout 10m`
-    /// but the bare `u64` parser rejected the unit suffix.
     #[arg(long, default_value = "300", value_parser = parse_timeout_arg)]
     timeout: u64,
 
@@ -140,7 +138,7 @@ struct Args {
 
     /// Emit the raw msgpack event stream to stdout (length-prefixed
     /// frames). When set, the human-readable / JSON test renderer
-    /// writes to stderr instead. Pipe to `provium-coverage` etc.
+    /// writes to stderr instead. Pipe to `provium-coverage`.
     #[arg(long, conflicts_with = "json")]
     events_stdout: bool,
 
@@ -186,8 +184,7 @@ struct Args {
     no_preflight: bool,
 
     /// Skip KSM tuning at startup. Default tunes
-    /// `/sys/kernel/mm/ksm/*` knobs per the design; pass this to
-    /// keep KSM at distro defaults (e.g. on shared dev hosts).
+    /// `/sys/kernel/mm/ksm/*`; pass this to preserve host settings.
     #[arg(long)]
     no_ksm: bool,
 
@@ -229,7 +226,7 @@ enum Cmd {
 
     /// Boot a profile's VM and attach your terminal to its serial
     /// console — like running `qemu-system-x86_64` by hand. No agent,
-    /// no Lua: just the guest's console on your TTY.
+    /// no Lua: the guest's console uses your terminal.
     ///
     /// `Ctrl-A X` quits QEMU; `Ctrl-A C` toggles the QEMU monitor.
     Console {
@@ -341,9 +338,8 @@ const DEFAULT_POOL_CPUS: u32 = 8;
 /// exit. Populated by `--coverage` when it stamps a temp file;
 /// cleared by the post-run cleanup AND by the SIGINT/atexit hook
 /// so a killed run doesn't leak the msgpack into $TMPDIR.
-static COVERAGE_TMP_CLEANUP: std::sync::OnceLock<
-    std::sync::Mutex<Vec<(PathBuf, PathBuf)>>,
-> = std::sync::OnceLock::new();
+static COVERAGE_TMP_CLEANUP: std::sync::OnceLock<std::sync::Mutex<Vec<(PathBuf, PathBuf)>>> =
+    std::sync::OnceLock::new();
 
 /// Parser for `--tag-meta KEY=VALUE` clap args. Splits on the first
 /// `=` only so values may contain further `=` characters
@@ -358,9 +354,10 @@ fn parse_kv(raw: &str) -> Result<(String, String), String> {
 }
 
 fn register_coverage_temp_cleanup(tmp: &std::path::Path, marker: &std::path::Path) {
-    let list = COVERAGE_TMP_CLEANUP
-        .get_or_init(|| std::sync::Mutex::new(Vec::new()));
-    list.lock().unwrap().push((tmp.to_path_buf(), marker.to_path_buf()));
+    let list = COVERAGE_TMP_CLEANUP.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+    list.lock()
+        .unwrap()
+        .push((tmp.to_path_buf(), marker.to_path_buf()));
     install_coverage_signal_handler();
 }
 
@@ -397,8 +394,14 @@ fn install_coverage_signal_handler() {
         // SAFETY: signal(2) returns the previous handler; we
         // don't rely on it. SIGINT only — SIGKILL is unstoppable.
         unsafe {
-            libc::signal(libc::SIGINT, coverage_signal_handler as *const () as libc::sighandler_t);
-            libc::signal(libc::SIGTERM, coverage_signal_handler as *const () as libc::sighandler_t);
+            libc::signal(
+                libc::SIGINT,
+                coverage_signal_handler as *const () as libc::sighandler_t,
+            );
+            libc::signal(
+                libc::SIGTERM,
+                coverage_signal_handler as *const () as libc::sighandler_t,
+            );
         }
         // Also fire on normal exit so a panic late in run() that
         // bypasses the explicit cleanup still removes the file.
@@ -427,8 +430,8 @@ fn events_socket_sink(
     path: &std::path::Path,
 ) -> std::io::Result<provium_host::scheduler::events::UnixSocketSink> {
     let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let map = EVENTS_SOCKET_SINK
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let map =
+        EVENTS_SOCKET_SINK.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     let mut g = map.lock().unwrap();
     if let Some(existing) = g.get(&canon) {
         return Ok(existing.clone());
@@ -553,8 +556,7 @@ fn run(args: Args) -> Result<u32, Box<dyn std::error::Error>> {
     //     scanning tests, sorts by access time, evicts oldest until
     //     total size is ≤ the cap.
     {
-        let config_for_gc = provium_host::profile::Config::load(&args.config)
-            .unwrap_or_default();
+        let config_for_gc = provium_host::profile::Config::load(&args.config).unwrap_or_default();
         let cache_dir = config_for_gc
             .provium
             .cache_dir
@@ -731,8 +733,7 @@ fn run(args: Args) -> Result<u32, Box<dyn std::error::Error>> {
             );
             return Ok(0);
         }
-        let failed_set: std::collections::HashSet<PathBuf> =
-            failed.into_iter().collect();
+        let failed_set: std::collections::HashSet<PathBuf> = failed.into_iter().collect();
         discovered.retain(|p| failed_set.contains(p));
     }
 
@@ -853,8 +854,7 @@ fn run(args: Args) -> Result<u32, Box<dyn std::error::Error>> {
     //                chatter verbose re-enables — streamed lines
     //                still appear).
     let total_files = discovered.len();
-    let interactive =
-        std::io::stderr().is_terminal() && !args.json && !args.events_stdout;
+    let interactive = std::io::stderr().is_terminal() && !args.json && !args.events_stdout;
     let with_bar = interactive && !args.no_progress && !args.verbose;
     let reporter = Arc::new(ProgressReporter::new(
         total_files,
@@ -931,20 +931,18 @@ fn run(args: Args) -> Result<u32, Box<dyn std::error::Error>> {
                 let total = pool_for_emitter.total();
                 let available = pool_for_emitter.available();
                 let used = total.saturating_sub(available);
-                sink_for_emitter.emit(
-                    provium_protocol::events::Event::PoolState(
-                        provium_protocol::events::PoolState {
-                            used: provium_protocol::events::ResourceAmount {
-                                memory_bytes: used.memory_bytes,
-                                cpus: used.cpus,
-                            },
-                            available: provium_protocol::events::ResourceAmount {
-                                memory_bytes: available.memory_bytes,
-                                cpus: available.cpus,
-                            },
+                sink_for_emitter.emit(provium_protocol::events::Event::PoolState(
+                    provium_protocol::events::PoolState {
+                        used: provium_protocol::events::ResourceAmount {
+                            memory_bytes: used.memory_bytes,
+                            cpus: used.cpus,
                         },
-                    ),
-                );
+                        available: provium_protocol::events::ResourceAmount {
+                            memory_bytes: available.memory_bytes,
+                            cpus: available.cpus,
+                        },
+                    },
+                ));
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
         })
@@ -956,9 +954,7 @@ fn run(args: Args) -> Result<u32, Box<dyn std::error::Error>> {
         serde_json::Value::Array(
             pairs
                 .iter()
-                .map(|(k, v)| {
-                    serde_json::json!({"key": k, "value": v})
-                })
+                .map(|(k, v)| serde_json::json!({"key": k, "value": v}))
                 .collect(),
         )
     };
@@ -1042,8 +1038,11 @@ fn run(args: Args) -> Result<u32, Box<dyn std::error::Error>> {
     // narrow down. Only written when at least one failure exists;
     // a clean run leaves the previous state alone so the user can
     // still --rerun-failed against an earlier issue.
-    let failed_paths: Vec<PathBuf> =
-        results.iter().filter(|r| !r.passed()).map(|r| r.path.clone()).collect();
+    let failed_paths: Vec<PathBuf> = results
+        .iter()
+        .filter(|r| !r.passed())
+        .map(|r| r.path.clone())
+        .collect();
     if !failed_paths.is_empty() {
         save_rerun_failed(&failed_paths);
     }
@@ -1195,11 +1194,7 @@ fn is_test_file(p: &std::path::Path) -> bool {
 /// Substring match against the test-root-relative path so the same
 /// `--filter` value works whether roots were passed absolute or
 /// relative — per `DESIGN.md` § CLI / `--filter`.
-fn filter_matches(
-    filter: Option<&str>,
-    path: &std::path::Path,
-    root: &std::path::Path,
-) -> bool {
+fn filter_matches(filter: Option<&str>, path: &std::path::Path, root: &std::path::Path) -> bool {
     match filter {
         Some(f) => {
             let rel = path.strip_prefix(root).unwrap_or(path);
@@ -1454,9 +1449,7 @@ fn print_file_outcome(
     };
 
     if !quiet || f > 0 || r.timeout == provium_host::scheduler::FileTimeoutOutcome::TimedOut {
-        out!(
-            "{prefix}{status_label} {path_disp} ({p} passed, {f} failed, {s} skipped)"
-        );
+        out!("{prefix}{status_label} {path_disp} ({p} passed, {f} failed, {s} skipped)");
     }
 
     for t in &r.outcome.tests {
@@ -1607,10 +1600,7 @@ fn run_fixture_cmd(
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             let mut total: u64 = 0;
             for (path, size, kind) in &entries {
-                let key = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("?");
+                let key = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
                 println!("  {:>12}  {kind:<3}  {key}", human_bytes(*size));
                 total += *size;
             }
@@ -1625,21 +1615,16 @@ fn run_fixture_cmd(
             // kernel/initrd identifier. Without this, `fixture build`
             // wrote to a different hash than the one the runner
             // looks up at test time.
-            let dep_keys = provium_host::lua::lab_ud_resolve_dep_keys_pub(
-                &config.provium.roots,
-                &source,
-            );
-            let (kernels, initrds) =
-                provium_host::fixture::canonical_profile_paths_all(config);
+            let dep_keys =
+                provium_host::lua::lab_ud_resolve_dep_keys_pub(&config.provium.roots, &source);
+            let (kernels, initrds) = provium_host::fixture::canonical_profile_paths_all(config);
             let externals = provium_host::lua::lab_ud_resolve_external_deps_pub(
                 &config.provium.roots,
                 &fixture_path,
                 &source,
             );
-            let kernels_v: Vec<&std::path::Path> =
-                kernels.iter().map(|p| p.as_path()).collect();
-            let initrds_v: Vec<&std::path::Path> =
-                initrds.iter().map(|p| p.as_path()).collect();
+            let kernels_v: Vec<&std::path::Path> = kernels.iter().map(|p| p.as_path()).collect();
+            let initrds_v: Vec<&std::path::Path> = initrds.iter().map(|p| p.as_path()).collect();
             let external_refs: Vec<&std::path::Path> =
                 externals.iter().map(|p| p.as_path()).collect();
             let key = provium_host::fixture::compute_key_with_deps_kernels_and_externals(
@@ -1691,11 +1676,15 @@ fn run_fixture_cmd(
                         }
                         println!("  built: {}", entry.snapshot.display());
                     }
-                    provium_host::lua::fixture_build::FixtureBuildOutcome::Lab {
-                        snapshot_dir,
-                    } => {
-                        let lab_dir = cache_dir
-                            .join(format!("{}.lab", entry.snapshot.file_stem().unwrap_or_default().to_string_lossy()));
+                    provium_host::lua::fixture_build::FixtureBuildOutcome::Lab { snapshot_dir } => {
+                        let lab_dir = cache_dir.join(format!(
+                            "{}.lab",
+                            entry
+                                .snapshot
+                                .file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                        ));
                         let _ = std::fs::remove_dir_all(&lab_dir);
                         std::fs::rename(&snapshot_dir, &lab_dir)?;
                         println!("  built lab fixture: {}", lab_dir.display());
@@ -1708,21 +1697,16 @@ fn run_fixture_cmd(
             // we evict the cache entry the runner would actually use.
             let fixture_path = locate(&config.provium.roots, path)?;
             let source = std::fs::read(&fixture_path)?;
-            let dep_keys = provium_host::lua::lab_ud_resolve_dep_keys_pub(
-                &config.provium.roots,
-                &source,
-            );
-            let (kernels, initrds) =
-                provium_host::fixture::canonical_profile_paths_all(config);
+            let dep_keys =
+                provium_host::lua::lab_ud_resolve_dep_keys_pub(&config.provium.roots, &source);
+            let (kernels, initrds) = provium_host::fixture::canonical_profile_paths_all(config);
             let externals = provium_host::lua::lab_ud_resolve_external_deps_pub(
                 &config.provium.roots,
                 &fixture_path,
                 &source,
             );
-            let kernels_v: Vec<&std::path::Path> =
-                kernels.iter().map(|p| p.as_path()).collect();
-            let initrds_v: Vec<&std::path::Path> =
-                initrds.iter().map(|p| p.as_path()).collect();
+            let kernels_v: Vec<&std::path::Path> = kernels.iter().map(|p| p.as_path()).collect();
+            let initrds_v: Vec<&std::path::Path> = initrds.iter().map(|p| p.as_path()).collect();
             let external_refs: Vec<&std::path::Path> =
                 externals.iter().map(|p| p.as_path()).collect();
             let key = provium_host::fixture::compute_key_with_deps_kernels_and_externals(
@@ -1767,9 +1751,7 @@ fn run_fixture_cmd(
                     }
                     println!("  rebuilt: {}", entry.snapshot.display());
                 }
-                provium_host::lua::fixture_build::FixtureBuildOutcome::Lab {
-                    snapshot_dir,
-                } => {
+                provium_host::lua::fixture_build::FixtureBuildOutcome::Lab { snapshot_dir } => {
                     std::fs::rename(&snapshot_dir, &lab_dir)?;
                     println!("  rebuilt lab fixture: {}", lab_dir.display());
                 }
@@ -1801,8 +1783,7 @@ fn run_fixture_cmd(
             // hashes to a key not present in the cache. Both single-VM
             // (.snap) and lab (.lab/) cache layouts are checked.
             let mut found = 0u64;
-            let (kernels, initrds) =
-                provium_host::fixture::canonical_profile_paths_all(config);
+            let (kernels, initrds) = provium_host::fixture::canonical_profile_paths_all(config);
             for root in &config.provium.roots {
                 let root_path = std::path::Path::new(root);
                 if !root_path.exists() {
@@ -1821,17 +1802,15 @@ fn run_fixture_cmd(
                             .unwrap_or(false)
                     {
                         let source = std::fs::read(entry.path())?;
-                        let dep_keys =
-                            provium_host::lua::lab_ud_resolve_dep_keys_pub(
-                                &config.provium.roots,
-                                &source,
-                            );
-                        let externals =
-                            provium_host::lua::lab_ud_resolve_external_deps_pub(
-                                &config.provium.roots,
-                                entry.path(),
-                                &source,
-                            );
+                        let dep_keys = provium_host::lua::lab_ud_resolve_dep_keys_pub(
+                            &config.provium.roots,
+                            &source,
+                        );
+                        let externals = provium_host::lua::lab_ud_resolve_external_deps_pub(
+                            &config.provium.roots,
+                            entry.path(),
+                            &source,
+                        );
                         let kernels_v: Vec<&std::path::Path> =
                             kernels.iter().map(|p| p.as_path()).collect();
                         let initrds_v: Vec<&std::path::Path> =
@@ -1847,9 +1826,7 @@ fn run_fixture_cmd(
                                 &external_refs,
                             );
                         let cache_entry =
-                            provium_host::fixture::CacheEntryPaths::for_key(
-                                &cache_dir, &key,
-                            );
+                            provium_host::fixture::CacheEntryPaths::for_key(&cache_dir, &key);
                         let lab_dir = cache_dir.join(format!("{key}.lab"));
                         if !cache_entry.snapshot.exists() && !lab_dir.exists() {
                             println!("  {}", entry.path().display());
@@ -1864,10 +1841,7 @@ fn run_fixture_cmd(
     Ok(())
 }
 
-fn run_lsp_setup(
-    dir: &std::path::Path,
-    force: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn run_lsp_setup(dir: &std::path::Path, force: bool) -> Result<(), Box<dyn std::error::Error>> {
     if !dir.is_dir() {
         return Err(format!("`{}` is not a directory", dir.display()).into());
     }
@@ -1905,7 +1879,11 @@ fn run_lsp_setup(
 }
 
 fn list_command(config: &Config, fixtures: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let suffix = if fixtures { ".fixture.lua" } else { ".test.lua" };
+    let suffix = if fixtures {
+        ".fixture.lua"
+    } else {
+        ".test.lua"
+    };
     let roots: Vec<PathBuf> = if config.provium.roots.is_empty() {
         vec![std::env::current_dir()?]
     } else {
@@ -1930,7 +1908,10 @@ fn list_command(config: &Config, fixtures: bool) -> Result<(), Box<dyn std::erro
             }
         }
     }
-    println!("\n{count} {} found", if fixtures { "fixture(s)" } else { "test(s)" });
+    println!(
+        "\n{count} {} found",
+        if fixtures { "fixture(s)" } else { "test(s)" }
+    );
     Ok(())
 }
 
@@ -1981,10 +1962,8 @@ fn build_event_sink(args: &Args) -> Result<Arc<dyn EventSink>, Box<dyn std::erro
             // delete it.
             std::env::set_var("PROVIUM_COVERAGE_USER_FILE", "1");
         } else {
-            let tmp = std::env::temp_dir().join(format!(
-                "provium-coverage-{}.msgpack",
-                std::process::id()
-            ));
+            let tmp = std::env::temp_dir()
+                .join(format!("provium-coverage-{}.msgpack", std::process::id()));
             std::env::set_var("PROVIUM_COVERAGE_TMP", &tmp);
             // Stamp a marker so the post-run cleanup knows
             // *we* created this file (vs an externally-set
@@ -2077,7 +2056,9 @@ fn parse_timeout_arg(s: &str) -> Result<u64, String> {
     let (num, unit_secs) = if let Some(stripped) = s.strip_suffix("ms") {
         // Round up to whole seconds; never round a non-zero
         // duration down to 0.
-        let ms: f64 = stripped.trim().parse()
+        let ms: f64 = stripped
+            .trim()
+            .parse()
             .map_err(|_| format!("--timeout: cannot parse `{s}`"))?;
         let secs = (ms / 1000.0).ceil() as u64;
         return Ok(secs.max(if ms > 0.0 { 1 } else { 0 }));

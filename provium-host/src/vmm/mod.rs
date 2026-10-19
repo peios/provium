@@ -323,12 +323,7 @@ impl VmInstance {
     }
 
     /// Hot-plug a disk via the backend.
-    pub fn attach_disk(
-        &self,
-        disk_id: &str,
-        image: &Path,
-        readonly: bool,
-    ) -> Result<(), VmmError> {
+    pub fn attach_disk(&self, disk_id: &str, image: &Path, readonly: bool) -> Result<(), VmmError> {
         self.backend.attach_disk(disk_id, image, readonly)
     }
 
@@ -450,12 +445,7 @@ pub(crate) trait Backend: Send + Sync {
     /// Default-impl is a no-op, so a backend with no machine to plug
     /// into ignores it — the host-side record still happens, which is
     /// all `disk:read_sectors` needs.
-    fn attach_disk(
-        &self,
-        _disk_id: &str,
-        _image: &Path,
-        _readonly: bool,
-    ) -> Result<(), VmmError> {
+    fn attach_disk(&self, _disk_id: &str, _image: &Path, _readonly: bool) -> Result<(), VmmError> {
         Ok(())
     }
 
@@ -504,12 +494,7 @@ pub trait Vmm: Send + Sync {
     /// Returns once the VM is running and the agent has answered
     /// `Hello`, so the contained [`crate::agent_client::AgentClient`]
     /// is immediately usable for ops.
-    fn launch(
-        &self,
-        name: &str,
-        profile: &Profile,
-        opts: BootOpts,
-    ) -> Result<VmRunning, VmmError>;
+    fn launch(&self, name: &str, profile: &Profile, opts: BootOpts) -> Result<VmRunning, VmmError>;
 
     /// Resume a VM from a snapshot file produced by an earlier
     /// [`VmInstance::snapshot`]. Backends should override this with

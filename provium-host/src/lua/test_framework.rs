@@ -296,12 +296,13 @@ pub(crate) fn install(lua: &Lua) -> mlua::Result<()> {
     // deadline math — `os.clock()` returns CPU time which doesn't
     // advance during `_provium_sleep`, so a sleeping wait_until
     // would never time out.
-    static EPOCH: std::sync::OnceLock<std::time::Instant> =
-        std::sync::OnceLock::new();
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let now = lua.create_function(|_, ()| {
         let epoch = EPOCH.get_or_init(std::time::Instant::now);
         Ok(epoch.elapsed().as_secs_f64())
     })?;
     lua.globals().set("_provium_now", now)?;
-    lua.load(FRAMEWORK_LUA).set_name("provium-test-framework").exec()
+    lua.load(FRAMEWORK_LUA)
+        .set_name("provium-test-framework")
+        .exec()
 }

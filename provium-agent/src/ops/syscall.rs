@@ -17,8 +17,7 @@ pub fn syscall(mut args: SyscallArgs) -> AgentMessage {
     let mut bufs_owned: Vec<Vec<u8>> = std::mem::take(&mut args.bufs);
     // Every buffer's stable heap address. We only mutate buffer
     // *contents* below (never resize), so these stay valid.
-    let addrs: Vec<i64> =
-        bufs_owned.iter().map(|b| b.as_ptr() as i64).collect();
+    let addrs: Vec<i64> = bufs_owned.iter().map(|b| b.as_ptr() as i64).collect();
     // Nested-pointer splices first: write a child buffer's address
     // into a parent buffer at a byte offset (8-byte native pointer).
     // This lets a struct argument point at another buffer (e.g. the
@@ -36,9 +35,7 @@ pub fn syscall(mut args: SyscallArgs) -> AgentMessage {
     // Then the arg-slot pointers: replace `args[ptrs[i]]` with
     // `bufs[i]`'s address.
     for (i, ptr_idx) in args.ptrs.iter().copied().enumerate() {
-        if let (Some(slot), Some(addr)) =
-            (args.args.get_mut(ptr_idx as usize), addrs.get(i))
-        {
+        if let (Some(slot), Some(addr)) = (args.args.get_mut(ptr_idx as usize), addrs.get(i)) {
             *slot = *addr;
         }
     }
@@ -58,9 +55,7 @@ pub fn syscall(mut args: SyscallArgs) -> AgentMessage {
         )
     };
     let errno = if ret < 0 {
-        std::io::Error::last_os_error()
-            .raw_os_error()
-            .unwrap_or(0)
+        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
     } else {
         0
     };
@@ -87,14 +82,22 @@ mod tests {
             args: [0; 6],
             bufs: vec![vec![0u8; 16], vec![0u8; 8]],
             ptrs: vec![],
-            nested: vec![NestedPtr { parent: 0, child: 1, offset: 4 }],
+            nested: vec![NestedPtr {
+                parent: 0,
+                child: 1,
+                offset: 4,
+            }],
         };
         let AgentMessage::SyscallResult(r) = syscall(args) else {
             panic!("expected SyscallResult");
         };
         // Parent's bytes 0..4 stay zero; bytes 4..12 hold a nonzero
         // pointer to the child buffer.
-        assert_eq!(&r.out_bufs[0][0..4], &[0, 0, 0, 0], "offset must be respected");
+        assert_eq!(
+            &r.out_bufs[0][0..4],
+            &[0, 0, 0, 0],
+            "offset must be respected"
+        );
         assert!(
             r.out_bufs[0][4..12].iter().any(|&b| b != 0),
             "nested splice should write a nonzero pointer at the offset"

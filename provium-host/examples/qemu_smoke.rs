@@ -10,7 +10,7 @@
 //! ## Usage
 //!
 //! ```text
-//! cargo run --release --example qemu_smoke -- \
+//! ./bazel run //provium-host:qemu-smoke -- \
 //!     --kernel <path/to/bzImage> \
 //!     --initrd <path/to/initrd.cpio.gz>
 //! ```
@@ -174,7 +174,7 @@ fn build_config(args: &CliArgs) -> Arc<Config> {
             inject_agent: true,
             agent_overlay_path: None,
             agent_boot_timeout: None,
-        disks: Vec::new(),
+            disks: Vec::new(),
             cmdline_file: None,
             build: None,
             build_out: None,

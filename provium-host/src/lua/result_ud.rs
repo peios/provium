@@ -36,12 +36,8 @@ impl UserData for RunResultUd {
             })
         });
 
-        fields.add_field_method_get("stdout", |lua, this| {
-            lua.create_string(&this.inner.stdout)
-        });
-        fields.add_field_method_get("stderr", |lua, this| {
-            lua.create_string(&this.inner.stderr)
-        });
+        fields.add_field_method_get("stdout", |lua, this| lua.create_string(&this.inner.stdout));
+        fields.add_field_method_get("stderr", |lua, this| lua.create_string(&this.inner.stderr));
 
         fields.add_field_method_get("status", |_, this| Ok(status_name(this.inner.status)));
 
@@ -165,10 +161,7 @@ impl TailUd {
 
     /// Build with a captured creation site. Used by Lua-side
     /// constructors that have a `&Lua` available.
-    pub(crate) fn new_with_site(
-        session: VmTailSession,
-        site: Option<(String, i32)>,
-    ) -> Self {
+    pub(crate) fn new_with_site(session: VmTailSession, site: Option<(String, i32)>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(TailInner {
                 session: Some(session),
@@ -185,10 +178,7 @@ impl TailUd {
 ///
 /// Supported suffixes: `ms`, `s`, `m`, `h`. Bare numbers are
 /// seconds. Invalid forms raise.
-pub(crate) fn parse_duration(
-    v: Option<Value>,
-    default: f64,
-) -> mlua::Result<f64> {
+pub(crate) fn parse_duration(v: Option<Value>, default: f64) -> mlua::Result<f64> {
     let secs = match v {
         None | Some(Value::Nil) => return Ok(default),
         Some(Value::Integer(n)) => n as f64,
@@ -286,7 +276,9 @@ pub(crate) fn capture_creation_site(lua: &mlua::Lua) -> Option<(String, i32)> {
             None => break,
         };
         let names = dbg.source();
-        let Some(src) = names.source.as_deref() else { continue };
+        let Some(src) = names.source.as_deref() else {
+            continue;
+        };
         let src_str = String::from_utf8_lossy(src.as_ref()).into_owned();
         let line = dbg.curr_line();
         if fallback.is_none() {
@@ -309,16 +301,14 @@ impl UserData for TailUd {
         // author's `(file, line)` at stream creation. Returns nil
         // if the stream was opened from a frame that didn't match
         // a `*.test.lua` / `*.fixture.lua` source.
-        methods.add_method("creation_site", |lua, this, ()| {
-            match &this.creation_site {
-                Some((file, line)) => {
-                    let table = lua.create_table()?;
-                    table.set("file", file.clone())?;
-                    table.set("line", *line)?;
-                    Ok(Value::Table(table))
-                }
-                None => Ok(Value::Nil),
+        methods.add_method("creation_site", |lua, this, ()| match &this.creation_site {
+            Some((file, line)) => {
+                let table = lua.create_table()?;
+                table.set("file", file.clone())?;
+                table.set("line", *line)?;
+                Ok(Value::Table(table))
             }
+            None => Ok(Value::Nil),
         });
 
         // `tail:next([timeout])` — pull the next frame.
@@ -350,9 +340,7 @@ impl UserData for TailUd {
             // connectors that can't honour it.
             let restore = if let Some(v) = timeout {
                 let secs = parse_duration(Some(v), 10.0)?;
-                let _ = session.set_read_timeout(Some(
-                    std::time::Duration::from_secs_f64(secs),
-                ));
+                let _ = session.set_read_timeout(Some(std::time::Duration::from_secs_f64(secs)));
                 true
             } else {
                 false
@@ -364,12 +352,11 @@ impl UserData for TailUd {
             match outcome {
                 Ok(Some(frame)) => lua.create_string(&frame.data).map(Value::String),
                 Ok(None) => Ok(Value::Nil),
-                Err(crate::ClientError::Frame(
-                    provium_protocol::FrameError::Io(e),
-                )) if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
+                Err(crate::ClientError::Frame(provium_protocol::FrameError::Io(e)))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
                 {
                     Ok(Value::Nil)
                 }
@@ -407,8 +394,7 @@ impl UserData for TailUd {
         methods.add_method(
             "read_until",
             |lua, this, (pattern, timeout): (String, Option<Value>)| {
-                let timeout =
-                    std::time::Duration::from_secs_f64(parse_duration(timeout, 10.0)?);
+                let timeout = std::time::Duration::from_secs_f64(parse_duration(timeout, 10.0)?);
                 let deadline = std::time::Instant::now() + timeout;
                 let mut acc = {
                     // Drain any leftover bytes from a previous call
@@ -464,12 +450,12 @@ impl UserData for TailUd {
                         // message rather than a raw EAGAIN. Mirrors
                         // drain's WouldBlock-as-no-more-data
                         // handling.
-                        Err(crate::ClientError::Frame(
-                            provium_protocol::FrameError::Io(e),
-                        )) if matches!(
-                            e.kind(),
-                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                        ) => {
+                        Err(crate::ClientError::Frame(provium_protocol::FrameError::Io(e)))
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) =>
+                        {
                             // fall through to deadline check
                         }
                         Err(e) => return Err(mlua::Error::external(e)),
@@ -512,8 +498,7 @@ impl UserData for TailUd {
         methods.add_method(
             "expect",
             |_, this, (pattern, timeout): (String, Option<Value>)| {
-                let timeout =
-                    std::time::Duration::from_secs_f64(parse_duration(timeout, 10.0)?);
+                let timeout = std::time::Duration::from_secs_f64(parse_duration(timeout, 10.0)?);
                 let deadline = std::time::Instant::now() + timeout;
                 let mut acc = {
                     let mut g = this
@@ -562,12 +547,12 @@ impl UserData for TailUd {
                         // deadline check at top so the user gets
                         // the clean "expect timed out waiting for
                         // `…`" message rather than raw EAGAIN.
-                        Err(crate::ClientError::Frame(
-                            provium_protocol::FrameError::Io(e),
-                        )) if matches!(
-                            e.kind(),
-                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                        ) => {
+                        Err(crate::ClientError::Frame(provium_protocol::FrameError::Io(e)))
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) =>
+                        {
                             // fall through
                         }
                         Err(e) => return Err(mlua::Error::external(e)),
@@ -603,8 +588,7 @@ impl UserData for TailUd {
         // and return as a list. Stops when next_frame returns nil
         // OR timeout lapses, whichever first.
         methods.add_method("drain", |lua, this, timeout: Option<Value>| {
-            let timeout =
-                std::time::Duration::from_secs_f64(parse_duration(timeout, 0.5)?);
+            let timeout = std::time::Duration::from_secs_f64(parse_duration(timeout, 0.5)?);
             let deadline = std::time::Instant::now() + timeout;
             let table = lua.create_table()?;
             let mut idx = 1;
@@ -655,12 +639,14 @@ impl UserData for TailUd {
                     // Mirrors `next`'s behavior — without this,
                     // drain on a quiet stream raises EAGAIN to the
                     // test author who can't act on it usefully.
-                    Err(crate::ClientError::Frame(
-                        provium_protocol::FrameError::Io(e),
-                    )) if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) => break,
+                    Err(crate::ClientError::Frame(provium_protocol::FrameError::Io(e)))
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        break
+                    }
                     Err(e) => return Err(mlua::Error::external(e)),
                 }
             }
@@ -722,7 +708,7 @@ impl UserData for ProcessUd {
                         return Err(mlua::Error::external(
                             "proc:wait: timeout=0 would SIGKILL the process \
                              immediately. Use proc:status() to poll, or pass \
-                             a small positive timeout (e.g. \"100ms\")."
+                             a small positive timeout (e.g. \"100ms\").",
                         ));
                     }
                     Some((secs * 1000.0) as u64)
@@ -757,9 +743,7 @@ impl UserData for ProcessUd {
                     )));
                 }
             };
-            this.process
-                .kill(signal)
-                .map_err(mlua::Error::external)?;
+            this.process.kill(signal).map_err(mlua::Error::external)?;
             Ok(())
         });
 
@@ -767,7 +751,10 @@ impl UserData for ProcessUd {
             // Kernel PID, fetched live via GetPid. The opaque
             // provium handle is exposed separately via `:handle()`
             // for diagnostic / scope-tracking purposes.
-            this.process.pid().map_err(mlua::Error::external).map(|p| p as u64)
+            this.process
+                .pid()
+                .map_err(mlua::Error::external)
+                .map(|p| p as u64)
         });
         methods.add_method("handle", |_, this, ()| Ok(this.process.handle().get()));
 
@@ -893,8 +880,8 @@ impl WorkerUd {
 impl UserData for WorkerUd {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("run", |lua, this, args: mlua::Variadic<Value>| {
-            let exec = super::vm_ud::build_exec_args_public(&args)
-                .map_err(mlua::Error::external)?;
+            let exec =
+                super::vm_ud::build_exec_args_public(&args).map_err(mlua::Error::external)?;
             let result = this.worker.run(exec).map_err(mlua::Error::external)?;
             wrap_run_result(lua, result)
         });
@@ -907,8 +894,8 @@ impl UserData for WorkerUd {
         // [`Process`] tied to the parent VM, so test code sees the
         // "same VM API". Files are the exception — see `open_file`.
         methods.add_method("run_async", |lua, this, args: mlua::Variadic<Value>| {
-            let exec = super::vm_ud::build_exec_args_public(&args)
-                .map_err(mlua::Error::external)?;
+            let exec =
+                super::vm_ud::build_exec_args_public(&args).map_err(mlua::Error::external)?;
             if exec.timeout_ms.is_some() {
                 return Err(mlua::Error::external(
                     "worker:run_async: `timeout` is not honoured here; \
@@ -955,15 +942,14 @@ impl UserData for WorkerUd {
         // (nr, int, int, ...) form and the table form
         // {args=, bufs=, ptrs=}; returns {ret, result, errno, out_bufs}.
         methods.add_method("syscall", |lua, this, args: mlua::Variadic<Value>| {
-            let nr_v = args.first().cloned().ok_or_else(|| {
-                mlua::Error::external("worker:syscall(nr, ...): missing nr")
-            })?;
+            let nr_v = args
+                .first()
+                .cloned()
+                .ok_or_else(|| mlua::Error::external("worker:syscall(nr, ...): missing nr"))?;
             let nr = match nr_v {
                 Value::Integer(n) => n,
                 Value::Number(n) => n as i64,
-                _ => return Err(mlua::Error::external(
-                    "worker:syscall: nr must be integer",
-                )),
+                _ => return Err(mlua::Error::external("worker:syscall: nr must be integer")),
             };
             let mut filled = [0i64; 6];
             let mut bufs: Vec<Vec<u8>> = Vec::new();
@@ -1047,7 +1033,11 @@ impl UserData for WorkerUd {
             let nr = match nr_v {
                 Value::Integer(n) => n,
                 Value::Number(n) => n as i64,
-                _ => return Err(mlua::Error::external("worker:syscall_async: nr must be integer")),
+                _ => {
+                    return Err(mlua::Error::external(
+                        "worker:syscall_async: nr must be integer",
+                    ))
+                }
             };
             let mut filled = [0i64; 6];
             let mut bufs: Vec<Vec<u8>> = Vec::new();
@@ -1056,7 +1046,7 @@ impl UserData for WorkerUd {
             if let Some(Value::Table(t)) = args.get(1).cloned() {
                 if let Ok(arg_tbl) = t.get::<mlua::Table>("args") {
                     for (i, slot) in filled.iter_mut().enumerate() {
-                        if let Some(v) = arg_tbl.get::<i64>((i + 1) as i64).ok() {
+                        if let Ok(v) = arg_tbl.get::<i64>((i + 1) as i64) {
                             *slot = v;
                         }
                     }
@@ -1177,9 +1167,7 @@ impl UserData for ConsoleUd {
         // § Console.
         methods.add_method("read", |lua, this, ()| {
             let path = this.vm.console_socket_path().ok_or_else(|| {
-                mlua::Error::external(
-                    "console:read: VMM does not expose a console socket",
-                )
+                mlua::Error::external("console:read: VMM does not expose a console socket")
             })?;
             let site = capture_creation_site(lua);
             let test_name = current_test_name(lua);
@@ -1193,10 +1181,9 @@ impl UserData for ConsoleUd {
                 creation_site: site.clone(),
                 test_name,
             });
-            let stream = super::console_stream_ud::ConsoleStreamUd::connect_with_guard(
-                &path, site, guard,
-            )
-            .map_err(mlua::Error::external)?;
+            let stream =
+                super::console_stream_ud::ConsoleStreamUd::connect_with_guard(&path, site, guard)
+                    .map_err(mlua::Error::external)?;
             register_resource(lua, stream, "stream")
         });
 
@@ -1215,22 +1202,15 @@ impl UserData for ConsoleUd {
         methods.add_method(
             "expect",
             |lua, this, (pattern, timeout): (String, Option<Value>)| {
-                let timeout =
-                    std::time::Duration::from_secs_f64(parse_duration(timeout, 30.0)?);
+                let timeout = std::time::Duration::from_secs_f64(parse_duration(timeout, 30.0)?);
                 let deadline = std::time::Instant::now() + timeout;
                 let mut last_len = 0usize;
                 loop {
-                    let bytes = this
-                        .vm
-                        .console_read()
-                        .map_err(mlua::Error::external)?;
+                    let bytes = this.vm.console_read().map_err(mlua::Error::external)?;
                     if bytes.len() >= last_len {
-                        let view =
-                            String::from_utf8_lossy(&bytes[last_len..]);
+                        let view = String::from_utf8_lossy(&bytes[last_len..]);
                         if view.contains(&pattern) {
-                            return lua
-                                .create_string(pattern.as_bytes())
-                                .map(Value::String);
+                            return lua.create_string(pattern.as_bytes()).map(Value::String);
                         }
                         last_len = bytes.len();
                     }
@@ -1361,14 +1341,9 @@ impl UserData for ClockUd {
                 Value::Integer(n) => n as f64,
                 Value::Number(n) => n,
                 Value::String(s) => {
-                    let raw = s
-                        .to_str()
-                        .map_err(mlua::Error::external)?
-                        .to_string();
+                    let raw = s.to_str().map_err(mlua::Error::external)?.to_string();
                     parse_duration_str(&raw).ok_or_else(|| {
-                        mlua::Error::external(format!(
-                            "clock:advance: cannot parse `{raw}`"
-                        ))
+                        mlua::Error::external(format!("clock:advance: cannot parse `{raw}`"))
                     })?
                 }
                 other => {

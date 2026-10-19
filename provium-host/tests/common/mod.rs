@@ -30,7 +30,8 @@ pub fn default_config() -> Arc<Config> {
         "peios".into(),
         Profile {
             kernel: "/unused".into(),
-            initrd: "/unused".into(), root: None,
+            initrd: "/unused".into(),
+            root: None,
             cmdline: "console=hvc0".into(),
             guest_os: "peios".into(),
             inject_agent: true,
@@ -39,7 +40,8 @@ pub fn default_config() -> Arc<Config> {
             disks: Vec::new(),
             cmdline_file: None,
             build: None,
-            build_out: None, dir: None,
+            build_out: None,
+            dir: None,
         },
     );
     Arc::new(Config {
@@ -76,8 +78,12 @@ pub fn assert_all_passed(outcome: &FileOutcome) {
 
 /// Assert exactly one test ran and it passed.
 pub fn assert_one_passed(outcome: &FileOutcome) {
-    assert_eq!(outcome.tests.len(), 1, "expected one test, got {:?}",
-        outcome.tests.iter().map(|t| &t.name).collect::<Vec<_>>());
+    assert_eq!(
+        outcome.tests.len(),
+        1,
+        "expected one test, got {:?}",
+        outcome.tests.iter().map(|t| &t.name).collect::<Vec<_>>()
+    );
     assert_eq!(
         outcome.tests[0].status,
         TestStatus::Passed,
@@ -90,8 +96,12 @@ pub fn assert_one_passed(outcome: &FileOutcome) {
 /// appearing in the failure message. Used for pin-pointing
 /// the exact wording of error paths.
 pub fn assert_one_failed_with(outcome: &FileOutcome, needle: &str) {
-    assert_eq!(outcome.tests.len(), 1, "expected one test, got {:?}",
-        outcome.tests.iter().map(|t| &t.name).collect::<Vec<_>>());
+    assert_eq!(
+        outcome.tests.len(),
+        1,
+        "expected one test, got {:?}",
+        outcome.tests.iter().map(|t| &t.name).collect::<Vec<_>>()
+    );
     assert_eq!(
         outcome.tests[0].status,
         TestStatus::Failed,

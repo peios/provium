@@ -256,9 +256,7 @@ impl DiskSpec {
     /// The id this disk is addressed by — the explicit one, or the
     /// positional default.
     pub fn resolved_id(&self, index: usize) -> String {
-        self.id
-            .clone()
-            .unwrap_or_else(|| format!("disk{index}"))
+        self.id.clone().unwrap_or_else(|| format!("disk{index}"))
     }
 }
 
@@ -283,7 +281,10 @@ pub fn default_build_base() -> PathBuf {
         return PathBuf::from(p).join("provium").join("builds");
     }
     if let Some(p) = std::env::var_os("HOME") {
-        return PathBuf::from(p).join(".cache").join("provium").join("builds");
+        return PathBuf::from(p)
+            .join(".cache")
+            .join("provium")
+            .join("builds");
     }
     PathBuf::from("/tmp/provium-builds")
 }
@@ -441,7 +442,10 @@ fn discover_profiles(
         if !file.is_file() {
             continue;
         }
-        let Some(name) = profile_dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        let Some(name) = profile_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+        else {
             continue;
         };
         let raw = fs::read_to_string(&file).map_err(|source| ConfigError::Io {
@@ -903,7 +907,9 @@ cmdline_file = "{out}/root/boot/cmdline"
         );
         assert_eq!(
             p.kernel,
-            PathBuf::from("/custom/build/peios/root/usr/lib/modules/7.0.9-peios/vmlinuz-7.0.9-peios")
+            PathBuf::from(
+                "/custom/build/peios/root/usr/lib/modules/7.0.9-peios/vmlinuz-7.0.9-peios"
+            )
         );
         assert_eq!(p.initrd, PathBuf::from("/custom/build/peios/initrd.img"));
         assert_eq!(
@@ -951,7 +957,10 @@ cmdline = "console=ttyS0"
         cfg.expand_build_outputs();
         let p = cfg.profile("peios").unwrap();
         // A static profile is untouched.
-        assert_eq!(p.kernel, PathBuf::from("../peiso/out/root/usr/lib/modules/7.0.9-peios/vmlinuz-7.0.9-peios"));
+        assert_eq!(
+            p.kernel,
+            PathBuf::from("../peiso/out/root/usr/lib/modules/7.0.9-peios/vmlinuz-7.0.9-peios")
+        );
         assert_eq!(p.cmdline, "console=ttyS0");
         assert!(p.build.is_none());
     }
@@ -1003,7 +1012,10 @@ initrd = "/i"
         assert_eq!(names, vec!["full", "kernel-only"], "named after their dirs");
         let ko = cfg.profile("kernel-only").unwrap();
         assert_eq!(ko.build.as_deref(), Some("echo kernel-only"));
-        assert_eq!(ko.dir.as_deref(), Some(tmp.path().join("profiles/kernel-only").as_path()));
+        assert_eq!(
+            ko.dir.as_deref(),
+            Some(tmp.path().join("profiles/kernel-only").as_path())
+        );
     }
 
     #[test]
@@ -1056,7 +1068,10 @@ initrd = "/i"
         let p = cfg.profile("vendored").unwrap();
         assert_eq!(p.kernel, dir.join("boot/vmlinuz"));
         assert_eq!(p.initrd, dir.join("boot/initrd.cpio.gz"));
-        assert_eq!(p.cmdline_file.as_deref(), Some(dir.join("cmdline").as_path()));
+        assert_eq!(
+            p.cmdline_file.as_deref(),
+            Some(dir.join("cmdline").as_path())
+        );
     }
 
     #[test]
@@ -1075,7 +1090,11 @@ initrd = "/i"
         assert_eq!(disks.len(), 2);
         assert_eq!(disks[0].path, PathBuf::from("/img/peios.iso"));
         assert!(disks[0].readonly);
-        assert_eq!(disks[0].resolved_id(0), "disk0", "unnamed disks take a positional id");
+        assert_eq!(
+            disks[0].resolved_id(0),
+            "disk0",
+            "unnamed disks take a positional id"
+        );
         assert!(!disks[1].readonly, "readonly is opt-in");
         assert_eq!(disks[1].resolved_id(1), "target");
         assert!(cfg.profile("plain").unwrap().disks.is_empty());
@@ -1145,7 +1164,11 @@ initrd = "/i"
         cfg.expand_build_outputs();
         let root = cfg.profile("kernel-only").unwrap().root.clone().unwrap();
         assert!(root.is_absolute(), "{}", root.display());
-        assert!(!root.to_string_lossy().contains("{out}"), "{}", root.display());
+        assert!(
+            !root.to_string_lossy().contains("{out}"),
+            "{}",
+            root.display()
+        );
         assert!(root.ends_with("kernel-only/root"), "{}", root.display());
     }
 
@@ -1185,7 +1208,10 @@ initrd = "/i"
     fn an_explicit_kernel_wins_over_a_root() {
         let root = composed_root(&["7.0.9-peios"]);
         let p = kernel_profile("/explicit/vmlinuz", Some(root.path().to_path_buf()));
-        assert_eq!(p.resolve_kernel().unwrap(), PathBuf::from("/explicit/vmlinuz"));
+        assert_eq!(
+            p.resolve_kernel().unwrap(),
+            PathBuf::from("/explicit/vmlinuz")
+        );
     }
 
     #[test]
@@ -1210,7 +1236,10 @@ initrd = "/i"
         let root = composed_root(&[]);
         std::fs::create_dir_all(root.path().join("usr/lib/modules")).unwrap();
         let p = kernel_profile("", Some(root.path().to_path_buf()));
-        assert!(matches!(p.resolve_kernel(), Err(KernelError::NotFound { .. })));
+        assert!(matches!(
+            p.resolve_kernel(),
+            Err(KernelError::NotFound { .. })
+        ));
     }
 
     /// Picking one of two silently would make a conformance result

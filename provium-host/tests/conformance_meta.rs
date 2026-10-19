@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{run_local_lua};
+use common::run_local_lua;
 use provium_host::lua::TestStatus;
 
 #[test]
@@ -35,8 +35,11 @@ end)
 "#,
     );
     assert_eq!(outcome.tests.len(), 1);
-    assert_eq!(outcome.tests[0].status, TestStatus::Skipped,
-        "slow=true must skip by default");
+    assert_eq!(
+        outcome.tests[0].status,
+        TestStatus::Skipped,
+        "slow=true must skip by default"
+    );
 }
 
 #[test]

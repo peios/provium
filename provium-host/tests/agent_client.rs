@@ -129,7 +129,10 @@ fn version_mismatch_surfaces_clean_error() {
         })
         .unwrap_err();
     match err {
-        ClientError::VersionMismatch { host: 999, agent: 1 } => {}
+        ClientError::VersionMismatch {
+            host: 999,
+            agent: 1,
+        } => {}
         other => panic!("expected VersionMismatch, got {other:?}"),
     }
 }
@@ -450,10 +453,7 @@ fn tail_file_streams_existing_then_appended_bytes() {
         TailFileOutcome::Err(e) => panic!("{e:?}"),
     };
 
-    let f1 = session
-        .next_frame()
-        .expect("frame")
-        .expect("frame present");
+    let f1 = session.next_frame().expect("frame").expect("frame present");
     assert_eq!(f1.data, b"first\n");
 
     {
@@ -464,10 +464,7 @@ fn tail_file_streams_existing_then_appended_bytes() {
         f.write_all(b"second\n").unwrap();
     }
 
-    let f2 = session
-        .next_frame()
-        .expect("frame")
-        .expect("frame present");
+    let f2 = session.next_frame().expect("frame").expect("frame present");
     assert_eq!(f2.data, b"second\n");
 
     // Drop the session — closes the connection from the host side.
@@ -493,7 +490,10 @@ fn tail_file_at_end_skips_existing_content() {
     };
 
     {
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         f.write_all(b"after\n").unwrap();
     }
 

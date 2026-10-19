@@ -5,7 +5,9 @@
 
 use provium_protocol::events::*;
 
-fn ts() -> i64 { 1_700_000_000_000_000_000 }
+fn ts() -> i64 {
+    1_700_000_000_000_000_000
+}
 
 fn round_trip(frame: &EventFrame) -> EventFrame {
     let bytes = rmp_serde::to_vec_named(frame).expect("serialize");
@@ -46,14 +48,18 @@ fn file_blocked_uses_memory_bytes_not_memory() {
     // grep the bytes for `memory_bytes` literally. (Decoding to
     // an untyped Value isn't worth a json/serde_json detour.)
     let mem_bytes_marker = b"memory_bytes";
-    let bare_memory_marker = b"\xa6memory";  // msgpack fixstr "memory" (6 chars)
-    let has_mem_bytes = bytes.windows(mem_bytes_marker.len())
+    let bare_memory_marker = b"\xa6memory"; // msgpack fixstr "memory" (6 chars)
+    let has_mem_bytes = bytes
+        .windows(mem_bytes_marker.len())
         .any(|w| w == mem_bytes_marker);
     assert!(has_mem_bytes, "wire schema must use memory_bytes");
-    let has_bare_memory = bytes.windows(bare_memory_marker.len())
+    let has_bare_memory = bytes
+        .windows(bare_memory_marker.len())
         .any(|w| w == bare_memory_marker);
-    assert!(!has_bare_memory,
-        "wire schema must not use bare `memory` as a 6-char string");
+    assert!(
+        !has_bare_memory,
+        "wire schema must not use bare `memory` as a 6-char string"
+    );
 }
 
 #[test]
@@ -119,8 +125,14 @@ fn pool_state_carries_used_and_available() {
     let f = EventFrame {
         ts: ts(),
         event: Event::PoolState(PoolState {
-            used: ResourceAmount { memory_bytes: 1024, cpus: 2 },
-            available: ResourceAmount { memory_bytes: 8192, cpus: 8 },
+            used: ResourceAmount {
+                memory_bytes: 1024,
+                cpus: 2,
+            },
+            available: ResourceAmount {
+                memory_bytes: 8192,
+                cpus: 8,
+            },
         }),
     };
     let r = round_trip(&f);

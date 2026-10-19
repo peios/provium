@@ -70,8 +70,7 @@ fn handle_zero_is_reserved_no_handle() {
 #[test]
 fn handle_default_is_zero() {
     let h: FileHandle = Default::default();
-    assert_eq!(h.get(), 0,
-        "Default must be the reserved no-handle id");
+    assert_eq!(h.get(), 0, "Default must be the reserved no-handle id");
 }
 
 #[test]
@@ -83,8 +82,8 @@ fn handle_get_returns_underlying_u64() {
 #[test]
 fn handle_is_copy_and_clone() {
     let h = FileHandle::new(1);
-    let h2 = h;     // Copy
-    let h3 = h.clone();
+    let h2 = h; // Copy
+    let h3 = h;
     assert_eq!(h, h2);
     assert_eq!(h, h3);
 }

@@ -53,7 +53,10 @@ struct State {
 #[derive(Clone)]
 enum ResponseSpec {
     Return(Value),
-    Error { class: String, desc: String },
+    Error {
+        class: String,
+        desc: String,
+    },
     /// Special: don't reply at all; used for testing the wrapper's
     /// timeout path.
     DropSilently,

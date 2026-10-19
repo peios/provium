@@ -4,22 +4,20 @@
 
 use std::sync::Arc;
 
-use provium_host::scheduler::psi::{
-    read_some_avg10, read_some_avg10_at, PressureFlag,
-};
-use provium_host::scheduler::dispatch::{
-    dispatch_files, DispatchOpts, FileTimeout,
-};
-use provium_host::scheduler::pool::{Pool, ResourceAmount};
 use provium_host::profile::{Config, Profile, ProviumSection};
+use provium_host::scheduler::dispatch::{dispatch_files, DispatchOpts, FileTimeout};
+use provium_host::scheduler::pool::{Pool, ResourceAmount};
+use provium_host::scheduler::psi::{read_some_avg10, read_some_avg10_at, PressureFlag};
 use provium_host::vmm::local_agent::LocalAgentVmm;
 use provium_host::vmm::Vmm;
 
 #[test]
 fn flag_defaults_clear() {
     let f = PressureFlag::default();
-    assert!(!f.is_pressured(),
-        "PressureFlag must default to false (no pressure)");
+    assert!(
+        !f.is_pressured(),
+        "PressureFlag must default to false (no pressure)"
+    );
 }
 
 #[test]
@@ -36,8 +34,10 @@ fn flag_clones_share_state() {
 #[test]
 fn read_some_avg10_returns_none_for_missing_path() {
     let v = read_some_avg10_at("/no/such/psi/path");
-    assert!(v.is_none(),
-        "missing path must return None (PSI graceful degradation)");
+    assert!(
+        v.is_none(),
+        "missing path must return None (PSI graceful degradation)"
+    );
 }
 
 #[test]
@@ -81,29 +81,38 @@ fn dispatcher_with_pressure_flag_runs_when_unpressured() {
     std::fs::write(&p, "test('x', function(t) end)").unwrap();
 
     let mut profiles = std::collections::BTreeMap::new();
-    profiles.insert("peios".into(), Profile {
-        kernel: "/unused".into(), initrd: "/unused".into(), root: None,
-        cmdline: "console=hvc0".into(), guest_os: "peios".into(),
+    profiles.insert(
+        "peios".into(),
+        Profile {
+            kernel: "/unused".into(),
+            initrd: "/unused".into(),
+            root: None,
+            cmdline: "console=hvc0".into(),
+            guest_os: "peios".into(),
             inject_agent: true,
             agent_overlay_path: None,
             agent_boot_timeout: None,
-        disks: Vec::new(),
+            disks: Vec::new(),
             cmdline_file: None,
             build: None,
             build_out: None,
             dir: None,
-    });
+        },
+    );
     let cfg = Arc::new(Config {
         provium: ProviumSection::default(),
         profiles,
     });
     let pool = Pool::new(ResourceAmount {
-        memory_bytes: 256 * 1024 * 1024, cpus: 1,
+        memory_bytes: 256 * 1024 * 1024,
+        cpus: 1,
     });
     let vmm: Arc<dyn Vmm> = Arc::new(LocalAgentVmm::new());
-    let mut o = DispatchOpts::default();
-    o.timeout = FileTimeout::Disabled;
-    o.pressure = Some(PressureFlag::default());
+    let o = DispatchOpts {
+        timeout: FileTimeout::Disabled,
+        pressure: Some(PressureFlag::default()),
+        ..DispatchOpts::default()
+    };
     let outs = dispatch_files(vec![p], pool, cfg, vmm, o);
     assert_eq!(outs.len(), 1);
     assert!(outs[0].passed());

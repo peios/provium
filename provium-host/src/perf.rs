@@ -57,10 +57,7 @@ impl KsmReport {
     /// One-line summary suitable for logging.
     pub fn summary(&self) -> String {
         if self.skipped.is_empty() {
-            format!(
-                "ksm: tuned ({} knobs)",
-                self.applied.len()
-            )
+            format!("ksm: tuned ({} knobs)", self.applied.len())
         } else if self.applied.is_empty() {
             format!(
                 "ksm: not tuned ({} knobs unwritable; first: `{}`)",
@@ -84,9 +81,7 @@ const KSM_KNOBS: &[(&str, &str)] = &[
 ];
 
 fn write_sysfs(path: &str, value: &str) -> io::Result<()> {
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)?;
+    let mut f = std::fs::OpenOptions::new().write(true).open(path)?;
     f.write_all(value.as_bytes())?;
     Ok(())
 }

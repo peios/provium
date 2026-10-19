@@ -198,8 +198,9 @@ impl DiskState {
             let sector_start = sector * SECTOR as u64;
             let from = offset.max(sector_start);
             let to = end.min(sector_start + SECTOR as u64);
-            buf[(from - offset) as usize..(to - offset) as usize]
-                .copy_from_slice(&held[(from - sector_start) as usize..(to - sector_start) as usize]);
+            buf[(from - offset) as usize..(to - offset) as usize].copy_from_slice(
+                &held[(from - sector_start) as usize..(to - sector_start) as usize],
+            );
         }
         Ok(buf)
     }
@@ -722,8 +723,14 @@ mod tests {
 
             let mut hello = [0u8; 18];
             stream.read_exact(&mut hello).unwrap();
-            assert_eq!(u64::from_be_bytes(hello[0..8].try_into().unwrap()), NBD_MAGIC);
-            assert_eq!(u64::from_be_bytes(hello[8..16].try_into().unwrap()), IHAVEOPT);
+            assert_eq!(
+                u64::from_be_bytes(hello[0..8].try_into().unwrap()),
+                NBD_MAGIC
+            );
+            assert_eq!(
+                u64::from_be_bytes(hello[8..16].try_into().unwrap()),
+                IHAVEOPT
+            );
 
             // Claim fixed-newstyle + no-zeroes, exactly as QEMU does.
             stream.write_all(&3u32.to_be_bytes()).unwrap();
@@ -871,7 +878,11 @@ mod tests {
         disk.power_cut();
 
         let on_disk = std::fs::read(&path).unwrap();
-        assert_eq!(&on_disk[..SECTOR], &[0x11; SECTOR], "the flushed write survives");
+        assert_eq!(
+            &on_disk[..SECTOR],
+            &[0x11; SECTOR],
+            "the flushed write survives"
+        );
         assert_eq!(
             &on_disk[SECTOR..2 * SECTOR],
             &[0u8; SECTOR],
@@ -1030,7 +1041,10 @@ mod tests {
         // failed write's bytes been left unread, the stream would be
         // desynchronised and this would hang or error.
         client.write(SECTOR as u64, &[0x88; SECTOR]);
-        assert_eq!(client.read(SECTOR as u64, SECTOR as u32), vec![0x88; SECTOR]);
+        assert_eq!(
+            client.read(SECTOR as u64, SECTOR as u32),
+            vec![0x88; SECTOR]
+        );
     }
 
     #[test]
@@ -1050,8 +1064,16 @@ mod tests {
             fail_after: Some(2),
             ..Default::default()
         });
-        assert_eq!(client.try_read(0, SECTOR as u32), 0, "the first still works");
-        assert_eq!(client.try_read(0, SECTOR as u32), NBD_EIO, "the second fails");
+        assert_eq!(
+            client.try_read(0, SECTOR as u32),
+            0,
+            "the first still works"
+        );
+        assert_eq!(
+            client.try_read(0, SECTOR as u32),
+            NBD_EIO,
+            "the second fails"
+        );
         assert_eq!(
             client.try_read(0, SECTOR as u32),
             NBD_EIO,
@@ -1112,7 +1134,10 @@ mod tests {
 
         // A command straddling the edge fails whole: one simple reply
         // carries one error, so half a read is not expressible.
-        assert_eq!(client.try_read(9 * SECTOR as u64, 2 * SECTOR as u32), NBD_EIO);
+        assert_eq!(
+            client.try_read(9 * SECTOR as u64, 2 * SECTOR as u32),
+            NBD_EIO
+        );
 
         // Writes obey the same range.
         assert_eq!(client.try_write(10 * SECTOR as u64, &[1; SECTOR]), NBD_EIO);

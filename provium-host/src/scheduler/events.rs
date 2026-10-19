@@ -114,10 +114,7 @@ impl WriteSink<LockedFile> {
     /// `--watch` so each iteration starts with a fresh event log
     /// (otherwise every iteration's frames pile up in the same
     /// file and replay tools see runs concatenated together).
-    pub fn file_with_mode(
-        path: impl AsRef<Path>,
-        truncate: bool,
-    ) -> std::io::Result<Self> {
+    pub fn file_with_mode(path: impl AsRef<Path>, truncate: bool) -> std::io::Result<Self> {
         let f = OpenOptions::new()
             .create(true)
             .truncate(truncate)
@@ -283,9 +280,7 @@ impl UnixSocketSink {
                     // single msgpack frame on a unix socket; on
                     // expiry `write_frame` returns Err and the
                     // emit-side `retain_mut` drops the client.
-                    let _ = stream.set_write_timeout(Some(
-                        std::time::Duration::from_millis(100),
-                    ));
+                    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(100)));
                     inner_for_thread.clients.lock().unwrap().push(stream);
                 }
             })?;
@@ -302,18 +297,14 @@ impl EventSink for UnixSocketSink {
         let mut clients = self.inner.clients.lock().unwrap();
         // Drop dead clients in-place. Stable, safe iteration via
         // retain_mut.
-        clients.retain_mut(|stream| {
-            write_frame(stream, &frame, DEFAULT_MAX_FRAME_BYTES).is_ok()
-        });
+        clients.retain_mut(|stream| write_frame(stream, &frame, DEFAULT_MAX_FRAME_BYTES).is_ok());
     }
 }
 
 fn now_ns() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| {
-            i64::try_from(d.as_nanos()).unwrap_or(i64::MAX)
-        })
+        .map(|d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX))
         .unwrap_or(0)
 }
 

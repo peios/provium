@@ -151,9 +151,7 @@ impl UserData for DiskUd {
         methods.add_method("read_sectors", |lua, this, (off, n): (u64, u64)| {
             let g = this.inner.lock().unwrap();
             if g.detached {
-                return Err(mlua::Error::external(
-                    "disk:read_sectors: disk is detached",
-                ));
+                return Err(mlua::Error::external("disk:read_sectors: disk is detached"));
             }
             let image = g.image.clone().ok_or_else(|| {
                 mlua::Error::external(
@@ -181,16 +179,13 @@ impl UserData for DiskUd {
                     ));
                 }
             }
-            let mut f =
-                std::fs::File::open(&image).map_err(mlua::Error::external)?;
+            let mut f = std::fs::File::open(&image).map_err(mlua::Error::external)?;
             use std::io::{Read, Seek, SeekFrom};
             f.seek(SeekFrom::Start(off.saturating_mul(SECTOR_BYTES)))
                 .map_err(mlua::Error::external)?;
             let want = (n.saturating_mul(SECTOR_BYTES)) as usize;
             let mut buf = vec![0u8; want];
-            let read = f
-                .read(&mut buf)
-                .map_err(mlua::Error::external)?;
+            let read = f.read(&mut buf).map_err(mlua::Error::external)?;
             buf.truncate(read);
             // Final post-I/O check — a fault_inject that landed
             // during the actual read should still convert the
@@ -338,9 +333,7 @@ impl UserData for DiskUd {
                      range overlaps nothing, so the fault would never fire",
                 ));
             }
-            amend_policy(this, "fail_range", |p| {
-                p.fail_range = Some((sector, count))
-            })
+            amend_policy(this, "fail_range", |p| p.fail_range = Some((sector, count)))
         });
         methods.add_method("delay", |_, this, ms: u64| {
             amend_policy(this, "delay", |p| {

@@ -48,13 +48,18 @@ mod tests {
 
     #[test]
     fn read_mem_args_round_trips() {
-        let a = ReadMemArgs { addr: 0xdead_beef_0000, len: 4096 };
+        let a = ReadMemArgs {
+            addr: 0xdead_beef_0000,
+            len: 4096,
+        };
         assert_eq!(a, round_trip(&a));
     }
 
     #[test]
     fn read_mem_ok_round_trips() {
-        let r = ReadMemOk { bytes: vec![1, 2, 3, 4, 0xff] };
+        let r = ReadMemOk {
+            bytes: vec![1, 2, 3, 4, 0xff],
+        };
         assert_eq!(r, round_trip(&r));
     }
 }

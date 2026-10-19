@@ -4,25 +4,32 @@
 //! requires a real fixture file on disk and is covered by
 //! tests/fixtures.rs.
 
-use provium_host::fixture::{canonical_profile_paths_all, compute_key,
-    compute_key_with_deps, compute_key_with_deps_and_kernel,
-    compute_key_with_deps_and_kernels};
+use provium_host::fixture::{
+    canonical_profile_paths_all, compute_key, compute_key_with_deps,
+    compute_key_with_deps_and_kernel, compute_key_with_deps_and_kernels,
+};
 use provium_host::profile::{Config, Profile, ProviumSection};
 
 #[test]
 fn cache_key_changes_with_source() {
     let k1 = compute_key(b"return 1");
     let k2 = compute_key(b"return 2");
-    assert_ne!(k1.as_str(), k2.as_str(),
-        "different sources must hash differently");
+    assert_ne!(
+        k1.as_str(),
+        k2.as_str(),
+        "different sources must hash differently"
+    );
 }
 
 #[test]
 fn cache_key_is_deterministic() {
     let k1 = compute_key(b"return 1");
     let k2 = compute_key(b"return 1");
-    assert_eq!(k1.as_str(), k2.as_str(),
-        "same source must hash same way across calls");
+    assert_eq!(
+        k1.as_str(),
+        k2.as_str(),
+        "same source must hash same way across calls"
+    );
 }
 
 #[test]
@@ -40,12 +47,8 @@ fn cache_key_changes_with_dep_keys() {
 fn cache_key_changes_with_kernel_path() {
     use std::path::Path;
     let k_no_kernel = compute_key_with_deps_and_kernel(b"return 1", &[], None, None);
-    let k_with_kernel = compute_key_with_deps_and_kernel(
-        b"return 1",
-        &[],
-        Some(Path::new("/dev/null")),
-        None,
-    );
+    let k_with_kernel =
+        compute_key_with_deps_and_kernel(b"return 1", &[], Some(Path::new("/dev/null")), None);
     assert_ne!(
         k_no_kernel.as_str(),
         k_with_kernel.as_str(),
@@ -65,8 +68,11 @@ fn cache_key_dep_order_independent() {
     // test documents that — flip to assert_ne! → assert_eq!
     // if/when sorting is added (and rebuild every cached
     // fixture once at the cutover).
-    assert_ne!(k_ab.as_str(), k_ba.as_str(),
-        "dep order is currently load-bearing — see fixture.rs comment");
+    assert_ne!(
+        k_ab.as_str(),
+        k_ba.as_str(),
+        "dep order is currently load-bearing — see fixture.rs comment"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -151,16 +157,9 @@ fn cache_key_changes_with_a_later_profiles_kernel() {
 
     let key_of = |config: &Config| {
         let (kernels, initrds) = canonical_profile_paths_all(config);
-        let kernel_refs: Vec<&std::path::Path> =
-            kernels.iter().map(|p| p.as_path()).collect();
-        let initrd_refs: Vec<&std::path::Path> =
-            initrds.iter().map(|p| p.as_path()).collect();
-        compute_key_with_deps_and_kernels(
-            b"return 1",
-            &[],
-            &kernel_refs,
-            &initrd_refs,
-        )
+        let kernel_refs: Vec<&std::path::Path> = kernels.iter().map(|p| p.as_path()).collect();
+        let initrd_refs: Vec<&std::path::Path> = initrds.iter().map(|p| p.as_path()).collect();
+        compute_key_with_deps_and_kernels(b"return 1", &[], &kernel_refs, &initrd_refs)
     };
 
     assert_ne!(

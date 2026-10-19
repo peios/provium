@@ -450,7 +450,8 @@ mod tests {
         // We synthesise that case by serializing a minimal map.
         let bytes = rmp_serde::to_vec_named(&serde_json::json!({
             "path": "/tmp/x",
-        })).unwrap();
+        }))
+        .unwrap();
         let decoded: StatArgs = rmp_serde::from_slice(&bytes).unwrap();
         assert!(decoded.follow_symlinks);
     }

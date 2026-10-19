@@ -43,25 +43,23 @@ pub use stream::{StreamEnd, StreamFrame};
 // Re-export op types at the wire level for ergonomics.
 pub use ops::{
     AdvanceClockArgs, AdvanceClockResult, BatchExecArgs, BatchExecResult, BatchOpArgs,
-    BatchOpResult, ClockTime, CloseArgs,
-    CloseResult, DirEntry, EntryType, ExecArgs, ExecOk, ExecResult, ExitStatus, FdStreamArgs,
-    FdStreamResult, FileMetadata, GetTimeArgs, GetTimeResult, IoctlArgs, IoctlOk, IoctlResult,
-    GetPidArgs, GetPidResult, KillArgs, KillResult, ListdirArgs, ListdirResult, MkdirArgs,
-    MkdirResult, NestedPtr, OpResult,
-    OpenFileArgs, OpenFileResult, OpenMode, ProcStatusArgs, ProcStatusResult, ProcStdinCloseArgs,
-    ProcStdinCloseResult, ProcStdinWriteArgs, ProcStdinWriteOk, ProcStdinWriteResult,
-    ProcStreamArgs, ProcStreamChannel, ProcStreamResult, ProcessLiveStatus, ReadArgs, ReadFileArgs,
-    ReadFileResult, ReadMemArgs, ReadMemOk, ReadMemResult, ReadOk, ReadResult, RenameArgs,
-    RenameResult, RunAsyncArgs, RunAsyncResult,
-    SeekArgs, SeekResult, SeekWhence, SetTimeArgs, SetTimeResult, SleepClockArgs, SleepClockResult,
-    SpawnWorkerArgs, SpawnWorkerResult, StatArgs, StatResult, SyscallArgs, SyscallResult,
-    TailFileArgs, TailFileResult, TailStart, UnlinkArgs, UnlinkResult, WaitArgs, WaitResult,
-    WorkerExecArgs, WorkerExecResult, WorkerJoinArgs, WorkerJoinPayload, WorkerJoinResult,
-    WorkerKillArgs,
-    WorkerKillResult, WorkerOpenFileArgs, WorkerOpenFileResult, WorkerRunAsyncArgs,
-    WorkerRunAsyncResult, WorkerSyscallArgs, WorkerSyscallAwaitArgs, WorkerSyscallAwaitResult,
-    WorkerSyscallBeginArgs, WorkerSyscallBeginResult, WorkerSyscallResult, WriteArgs, WriteFileArgs,
-    WriteFileMode, WriteFileResult, WriteOk, WriteResult,
+    BatchOpResult, ClockTime, CloseArgs, CloseResult, DirEntry, EntryType, ExecArgs, ExecOk,
+    ExecResult, ExitStatus, FdStreamArgs, FdStreamResult, FileMetadata, GetPidArgs, GetPidResult,
+    GetTimeArgs, GetTimeResult, IoctlArgs, IoctlOk, IoctlResult, KillArgs, KillResult, ListdirArgs,
+    ListdirResult, MkdirArgs, MkdirResult, NestedPtr, OpResult, OpenFileArgs, OpenFileResult,
+    OpenMode, ProcStatusArgs, ProcStatusResult, ProcStdinCloseArgs, ProcStdinCloseResult,
+    ProcStdinWriteArgs, ProcStdinWriteOk, ProcStdinWriteResult, ProcStreamArgs, ProcStreamChannel,
+    ProcStreamResult, ProcessLiveStatus, ReadArgs, ReadFileArgs, ReadFileResult, ReadMemArgs,
+    ReadMemOk, ReadMemResult, ReadOk, ReadResult, RenameArgs, RenameResult, RunAsyncArgs,
+    RunAsyncResult, SeekArgs, SeekResult, SeekWhence, SetTimeArgs, SetTimeResult, SleepClockArgs,
+    SleepClockResult, SpawnWorkerArgs, SpawnWorkerResult, StatArgs, StatResult, SyscallArgs,
+    SyscallResult, TailFileArgs, TailFileResult, TailStart, UnlinkArgs, UnlinkResult, WaitArgs,
+    WaitResult, WorkerExecArgs, WorkerExecResult, WorkerJoinArgs, WorkerJoinPayload,
+    WorkerJoinResult, WorkerKillArgs, WorkerKillResult, WorkerOpenFileArgs, WorkerOpenFileResult,
+    WorkerRunAsyncArgs, WorkerRunAsyncResult, WorkerSyscallArgs, WorkerSyscallAwaitArgs,
+    WorkerSyscallAwaitResult, WorkerSyscallBeginArgs, WorkerSyscallBeginResult,
+    WorkerSyscallResult, WriteArgs, WriteFileArgs, WriteFileMode, WriteFileResult, WriteOk,
+    WriteResult,
 };
 
 /// Anything the host sends to the agent.
@@ -560,12 +558,10 @@ mod tests {
         write_frame(&mut buf, &hello_ok, DEFAULT_MAX_FRAME_BYTES).unwrap();
 
         let mut cursor = Cursor::new(&buf);
-        let decoded_hello: HostMessage =
-            read_frame(&mut cursor, DEFAULT_MAX_FRAME_BYTES).unwrap();
+        let decoded_hello: HostMessage = read_frame(&mut cursor, DEFAULT_MAX_FRAME_BYTES).unwrap();
         assert_eq!(decoded_hello, hello);
 
-        let decoded_ok: AgentMessage =
-            read_frame(&mut cursor, DEFAULT_MAX_FRAME_BYTES).unwrap();
+        let decoded_ok: AgentMessage = read_frame(&mut cursor, DEFAULT_MAX_FRAME_BYTES).unwrap();
         assert_eq!(decoded_ok, hello_ok);
     }
 }

@@ -76,13 +76,10 @@ where
                 // (logrotate truncate-style). Emit clean EOF
                 // rather than spinning silently forever.
                 use std::io::Seek;
-                let pos = file.seek(std::io::SeekFrom::Current(0)).unwrap_or(0);
+                let pos = file.stream_position().unwrap_or(0);
                 let file_size = file.metadata().map(|m| m.len()).unwrap_or(pos);
                 if pos > file_size {
-                    let _ = write_agent_message(
-                        writer,
-                        &AgentMessage::StreamEnd(StreamEnd::Eof),
-                    );
+                    let _ = write_agent_message(writer, &AgentMessage::StreamEnd(StreamEnd::Eof));
                     return Ok(());
                 }
                 // At EOF for now — wait briefly and try again.
@@ -245,9 +242,7 @@ where
     if !handle_known {
         return write_agent_message(
             writer,
-            &AgentMessage::FdStreamResult(OpResult::Err(
-                provium_protocol::OsError::from_errno(9),
-            )),
+            &AgentMessage::FdStreamResult(OpResult::Err(provium_protocol::OsError::from_errno(9))),
         );
     }
 
@@ -269,10 +264,7 @@ where
                 // mid-stream) bail.
                 let still_known = state.with_file_mut(args.handle, |_| ()).is_some();
                 if !still_known {
-                    let _ = write_agent_message(
-                        writer,
-                        &AgentMessage::StreamEnd(StreamEnd::Eof),
-                    );
+                    let _ = write_agent_message(writer, &AgentMessage::StreamEnd(StreamEnd::Eof));
                     return Ok(());
                 }
             }

@@ -7,8 +7,10 @@ use provium_host::bridge_realize::{tap_name_for_vm, tap_name_for_vm_on_bridge};
 
 #[test]
 fn tap_name_includes_tap_prefix() {
-    assert!(tap_name_for_vm("web").starts_with("tap-"),
-        "TAP name must start with `tap-`");
+    assert!(
+        tap_name_for_vm("web").starts_with("tap-"),
+        "TAP name must start with `tap-`"
+    );
     assert!(tap_name_for_vm_on_bridge("web", "lan").starts_with("tap-"));
 }
 
@@ -22,17 +24,22 @@ fn tap_name_for_vm_is_under_ifnamsiz() {
 #[test]
 fn tap_name_for_vm_on_bridge_is_under_ifnamsiz() {
     let n = tap_name_for_vm_on_bridge("very-long-vm", "very-long-bridge");
-    assert!(n.len() <= 15,
-        "(vm, bridge) TAP must fit IFNAMSIZ: {n} (len {})", n.len());
+    assert!(
+        n.len() <= 15,
+        "(vm, bridge) TAP must fit IFNAMSIZ: {n} (len {})",
+        n.len()
+    );
 }
 
 #[test]
 fn tap_name_strips_special_chars() {
     let n = tap_name_for_vm("my.vm/with-slashes!");
     // Only ascii alphanumeric + `_` allowed in the name part.
-    assert!(!n.contains('.') && !n.contains('/') && !n.contains('!') && !n.contains('-')
-        || n.starts_with("tap-"),
-        "special chars must be stripped (besides the leading tap- delimiter): {n}");
+    assert!(
+        !n.contains('.') && !n.contains('/') && !n.contains('!') && !n.contains('-')
+            || n.starts_with("tap-"),
+        "special chars must be stripped (besides the leading tap- delimiter): {n}"
+    );
 }
 
 #[test]
@@ -71,10 +78,12 @@ fn tap_name_pinned_value_for_known_pair() {
     assert!(n.len() <= 15, "TAP name length must be ≤ 15: {n}");
     assert!(n.starts_with("tap-web"), "vm prefix must be 'web': {n}");
     // Lock the exact pinned value so any algorithm change is loud.
-    assert_eq!(n, "tap-webcc960b4",
+    assert_eq!(
+        n, "tap-webcc960b4",
         "FNV-1a 64-bit constants are pinned per docstring; if you \
          changed them deliberately, update this test AND understand \
-         that every captured TAP name in every fixture is now wrong");
+         that every captured TAP name in every fixture is now wrong"
+    );
 }
 
 #[test]

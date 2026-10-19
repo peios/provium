@@ -102,10 +102,7 @@ impl UserData for FileUd {
                 .handle
                 .ok_or_else(|| mlua::Error::external("file is closed"))?;
             let bytes = data.as_bytes().to_vec();
-            let written = g
-                .vm
-                .write(h, bytes)
-                .map_err(mlua::Error::external)?;
+            let written = g.vm.write(h, bytes).map_err(mlua::Error::external)?;
             g.cursor = g.cursor.saturating_add(written);
             Ok(written)
         });
@@ -145,10 +142,9 @@ impl UserData for FileUd {
             let h = g
                 .handle
                 .ok_or_else(|| mlua::Error::external("file is closed"))?;
-            let pos = g
-                .vm
-                .seek(h, 0, SeekWhence::Cur)
-                .map_err(mlua::Error::external)?;
+            let pos =
+                g.vm.seek(h, 0, SeekWhence::Cur)
+                    .map_err(mlua::Error::external)?;
             g.cursor = pos;
             Ok(pos)
         });
@@ -172,13 +168,12 @@ impl UserData for FileUd {
         // TailStart::Offset for the file's current cursor.
         methods.add_method("tail_stream", |lua, this, ()| {
             let g = this.inner.lock().unwrap();
-            let path = g
-                .path
-                .clone()
-                .ok_or_else(|| mlua::Error::external(
+            let path = g.path.clone().ok_or_else(|| {
+                mlua::Error::external(
                     "file:tail_stream needs the source path; \
                      opened via wrap() not wrap_with_path()",
-                ))?;
+                )
+            })?;
             let cursor = g.cursor;
             let vm = g.vm.clone();
             drop(g);
@@ -207,7 +202,9 @@ impl UserData for FileUd {
             let g = this.inner.lock().unwrap();
             Ok(format!(
                 "file({})",
-                g.handle.map(|h| h.to_string()).unwrap_or_else(|| "closed".into())
+                g.handle
+                    .map(|h| h.to_string())
+                    .unwrap_or_else(|| "closed".into())
             ))
         });
     }

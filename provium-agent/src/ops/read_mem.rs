@@ -25,9 +25,9 @@ const MAX_READ_LEN: usize = 64 * 1024 * 1024;
 pub fn read_mem(args: ReadMemArgs) -> AgentMessage {
     let len = args.len as usize;
     if len > MAX_READ_LEN {
-        return AgentMessage::ReadMemResult(OpResult::Err(
-            provium_protocol::OsError::from_errno(libc::EINVAL),
-        ));
+        return AgentMessage::ReadMemResult(OpResult::Err(provium_protocol::OsError::from_errno(
+            libc::EINVAL,
+        )));
     }
     AgentMessage::ReadMemResult(match read_self_mem(args.addr, len) {
         Ok(bytes) => OpResult::Ok(ReadMemOk { bytes }),
