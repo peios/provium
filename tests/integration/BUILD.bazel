@@ -1,0 +1,9 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "suite",
+    srcs = [
+        "LICENSE",
+        "suite.json",
+    ] + glob(["tests/**"]),
+)

@@ -1,0 +1,14 @@
+{
+    "format": 1,
+    "component": "provium",
+    "origin": {
+        "repository": "https://github.com/peios/integration-tests.git",
+        "commit": "a9aeaa2d6255bf59034ac5d90bee871a0d4829be"
+    },
+    "files": {
+        "tests/helpers/msgpack.lua": "tests/helpers/msgpack.lua",
+        "tests/helpers/sha1.lua": "tests/helpers/sha1.lua",
+        "tests/helpers/sys.lua": "tests/helpers/sys.lua"
+    },
+    "tests": []
+}
