@@ -159,36 +159,7 @@ pub fn prepare_initrd(
     let merged_path = cache_dir.join(format!("{key}.cpio.gz"));
 
     if !merged_path.exists() {
-        // Write to a temp file in the same dir, then rename — avoids
-        // a partial-write being seen as a "cache hit" by a sibling
-        // launch racing the same key. The temp name is per writer:
-        // a dozen launches missing the cache together after a
-        // recompose used to share one `.<key>.partial`, so the first
-        // rename took it from under the rest (ENOENT for them) and
-        // two writers could interleave on one file (PEI-1118).
-        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = cache_dir.join(format!(".{key}.{}.{seq}.partial", std::process::id()));
-        let mut f = fs::File::create(&tmp).map_err(|e| {
-            VmmError::AgentOverlay(format!("create cache file `{}`: {e}", tmp.display()))
-        })?;
-        f.write_all(&user_bytes)
-            .map_err(|e| VmmError::AgentOverlay(format!("write merged initrd: {e}")))?;
-        f.write_all(&overlay_bytes)
-            .map_err(|e| VmmError::AgentOverlay(format!("write merged initrd: {e}")))?;
-        drop(f);
-        if let Err(e) = fs::rename(&tmp, &merged_path) {
-            // A sibling that finished first has installed a complete
-            // entry (the rename into place is atomic); ours is surplus.
-            let _ = fs::remove_file(&tmp);
-            if !merged_path.exists() {
-                return Err(VmmError::AgentOverlay(format!(
-                    "rename `{}` -> `{}`: {e}",
-                    tmp.display(),
-                    merged_path.display(),
-                )));
-            }
-        }
+        write_cache_entry(&cache_dir, &merged_path, &user_bytes, &overlay_bytes)?;
     }
 
     let augmented_cmdline = with_rdinit(cmdline);
@@ -202,6 +173,26 @@ pub fn prepare_initrd(
 
 /// The cmdline with `rdinit=` pointing at the overlay's agent, unless
 /// it already says so.
+/// Publish a complete cache entry atomically; partial files are removed on every error path.
+fn write_cache_entry(
+    cache_dir: &Path,
+    merged_path: &Path,
+    user_bytes: &[u8],
+    overlay_bytes: &[u8],
+) -> Result<(), VmmError> {
+    let mut temporary = tempfile::NamedTempFile::new_in(cache_dir)
+        .map_err(|error| VmmError::AgentOverlay(format!("create cache file: {error}")))?;
+    temporary
+        .write_all(user_bytes)
+        .and_then(|()| temporary.write_all(overlay_bytes))
+        .map_err(|error| VmmError::AgentOverlay(format!("write merged initrd: {error}")))?;
+    // Concurrent writers of this content-addressed entry produce identical bytes.
+    temporary
+        .persist(merged_path)
+        .map_err(|error| VmmError::AgentOverlay(format!("publish merged initrd: {error}")))?;
+    Ok(())
+}
+
 fn with_rdinit(cmdline: &str) -> String {
     if parse_rdinit(cmdline).is_some() {
         cmdline.to_owned()
@@ -241,6 +232,36 @@ mod tests {
             build_out: None,
             dir: None,
         }
+    }
+
+    #[test]
+    fn failed_cache_publication_removes_its_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("occupied");
+        std::fs::create_dir(&destination).unwrap();
+        assert!(write_cache_entry(dir.path(), &destination, b"USER", b"OVERLAY").is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert!(destination.is_dir());
+    }
+
+    #[test]
+    fn concurrent_cache_writers_publish_complete_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("entry");
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let destination = &destination;
+                let directory = dir.path();
+                scope.spawn(move || {
+                    write_cache_entry(directory, destination, &[1; 8192], &[2; 8192]).unwrap();
+                });
+            }
+        });
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            [&[1; 8192][..], &[2; 8192][..]].concat()
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]

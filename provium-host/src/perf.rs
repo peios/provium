@@ -101,16 +101,17 @@ const SPARSE_BLOCK: usize = 4096;
 /// the original. Returns the bytes saved (positive = freed,
 /// negative shouldn't happen but is allowed).
 ///
-/// Slice-14 minimum: just sparse, no zstd. The design also calls
-/// for zstd on non-zero pages; that needs the zstd crate and
-/// significant streaming logic — out of scope here. The fixture
-/// cache tolerates the larger sparse-only file fine for now.
 pub fn make_sparse(path: &Path) -> io::Result<i64> {
     let original_size = std::fs::metadata(path)?.len() as i64;
 
     let mut input = File::open(path)?;
-    let tmp = path.with_extension("sparse.tmp");
-    let mut output = File::create(&tmp)?;
+    // Exclusive creation prevents a stale name or symlink from redirecting writes.
+    // Keep the file beside its destination so publication is an atomic rename.
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut output = tempfile::NamedTempFile::new_in(parent)?;
 
     let mut buf = vec![0u8; SPARSE_BLOCK];
     loop {
@@ -129,10 +130,9 @@ pub fn make_sparse(path: &Path) -> io::Result<i64> {
     // Trim the file to the input length (in case the tail was
     // zero and we seeked past it).
     let total = input.seek(SeekFrom::End(0))?;
-    output.set_len(total)?;
+    output.as_file().set_len(total)?;
     drop(input);
-    drop(output);
-    std::fs::rename(&tmp, path)?;
+    output.persist(path).map_err(|error| error.error)?;
 
     let new_size = std::fs::metadata(path)?.len() as i64;
     Ok(original_size - new_size)
@@ -184,6 +184,22 @@ pub fn decompress_zst(src: &Path, dst: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_rewrite_does_not_follow_a_stale_staging_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let snapshot = dir.path().join("snapshot.bin");
+        let unrelated = dir.path().join("unrelated");
+        std::fs::write(&snapshot, b"snapshot content").unwrap();
+        std::fs::write(&unrelated, b"keep this").unwrap();
+        std::os::unix::fs::symlink(&unrelated, snapshot.with_extension("sparse.tmp")).unwrap();
+
+        make_sparse(&snapshot).unwrap();
+
+        assert_eq!(std::fs::read(&snapshot).unwrap(), b"snapshot content");
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"keep this");
+        assert!(!snapshot.is_symlink());
+    }
 
     #[test]
     fn make_sparse_preserves_content() {
