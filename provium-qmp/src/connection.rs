@@ -1,17 +1,18 @@
 //! [`Qmp`] — the connection type and the reader-thread machinery.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::deadline::{self, Budget};
 use crate::error::QmpError;
 use crate::event::{Event, EventMark, WireEvent};
 
@@ -62,17 +63,31 @@ struct EventLog {
     close_reason: &'static str,
 }
 
+struct WriterSlot {
+    stream: Option<UnixStream>,
+    busy: bool,
+    closed: bool,
+}
+
 struct Inner {
-    writer: Mutex<Option<UnixStream>>,
+    writer: Mutex<WriterSlot>,
+    writer_cond: Condvar,
+    shutdown_stream: UnixStream,
     pending: Mutex<HashMap<String, Pending>>,
     log: Mutex<EventLog>,
     log_cond: Condvar,
 }
 
 impl Inner {
-    fn new(writer: UnixStream) -> Self {
+    fn new(writer: UnixStream, shutdown_stream: UnixStream) -> Self {
         Self {
-            writer: Mutex::new(Some(writer)),
+            writer: Mutex::new(WriterSlot {
+                stream: Some(writer),
+                busy: false,
+                closed: false,
+            }),
+            writer_cond: Condvar::new(),
+            shutdown_stream,
             pending: Mutex::new(HashMap::new()),
             log: Mutex::new(EventLog {
                 events: Vec::new(),
@@ -83,23 +98,48 @@ impl Inner {
         }
     }
 
+    fn send(&self, request: Value, budget: &Budget) -> Result<(), QmpError> {
+        let mut slot = self.writer.lock().unwrap();
+        while slot.busy && !slot.closed {
+            let remaining = budget.remaining()?;
+            slot = self.writer_cond.wait_timeout(slot, remaining).unwrap().0;
+        }
+        if slot.closed {
+            return Err(QmpError::Closed("write on closed connection"));
+        }
+        budget.remaining()?;
+        let mut stream = slot.stream.take().expect("idle writer owns its stream");
+        slot.busy = true;
+        drop(slot);
+
+        let result = deadline::send(&mut stream, request, budget);
+        if result.is_err() {
+            // A partial JSON line cannot be resumed as a different command.
+            self.shutdown("QMP send failed or timed out");
+        }
+        let mut slot = self.writer.lock().unwrap();
+        if !slot.closed {
+            slot.stream = Some(stream);
+        }
+        slot.busy = false;
+        self.writer_cond.notify_all();
+        result
+    }
+
     /// Mark the connection closed, sever the underlying socket so the
     /// reader's blocking `read_line` returns immediately, drain pending
     /// callers with a [`QmpError::Closed`], and wake any
     /// [`Qmp::wait_event`] waiters.
     fn shutdown(&self, reason: &'static str) {
+        // Shutdown does not acquire the writer permit: it must interrupt a send
+        // already in progress. Errors are harmless once the peer has disconnected.
+        let _ = self.shutdown_stream.shutdown(std::net::Shutdown::Both);
         {
-            let mut w = self.writer.lock().unwrap();
-            if let Some(stream) = w.as_ref() {
-                // Closing all fds for the same socket is not enough —
-                // the reader has a separately try_cloned fd. Shutting
-                // down the underlying socket forces both directions
-                // closed regardless of fd count, which is what wakes
-                // the reader thread.
-                let _ = stream.shutdown(std::net::Shutdown::Both);
-            }
-            *w = None;
+            let mut writer = self.writer.lock().unwrap();
+            writer.closed = true;
+            writer.stream = None;
         }
+        self.writer_cond.notify_all();
 
         {
             let mut log = self.log.lock().unwrap();
@@ -157,19 +197,32 @@ impl Qmp {
     /// 3. `migrate-set-capabilities` issued with `events: true` — without
     ///    this, MIGRATION events are not emitted (see crate-level docs).
     pub fn connect(path: impl AsRef<Path>) -> Result<Self, QmpError> {
-        let stream = UnixStream::connect(path.as_ref())?;
-        Self::from_stream(stream)
+        Self::connect_timeout(path, DEFAULT_COMMAND_TIMEOUT)
     }
 
-    /// Build a [`Qmp`] from an already-connected [`UnixStream`]. Used by
-    /// [`Self::connect`] and by tests against a mock server.
+    /// Connect and negotiate within one total timeout, including a full listen queue.
+    pub fn connect_timeout(path: impl AsRef<Path>, timeout: Duration) -> Result<Self, QmpError> {
+        let budget = Budget::new(timeout)?;
+        let stream = deadline::connect(path.as_ref(), &budget)?;
+        Self::handshake(stream, &budget)
+    }
+
+    /// Negotiate an existing stream within the default 30-second budget.
     pub fn from_stream(stream: UnixStream) -> Result<Self, QmpError> {
+        Self::from_stream_timeout(stream, DEFAULT_COMMAND_TIMEOUT)
+    }
+
+    /// Negotiate an existing stream within one budget for all greeting and capability I/O.
+    pub fn from_stream_timeout(stream: UnixStream, timeout: Duration) -> Result<Self, QmpError> {
+        Self::handshake(stream, &Budget::new(timeout)?)
+    }
+
+    fn handshake(stream: UnixStream, budget: &Budget) -> Result<Self, QmpError> {
         let writer = stream.try_clone()?;
         let mut reader = BufReader::new(stream);
 
         // Step 1: read the greeting.
-        let mut greeting = String::new();
-        reader.read_line(&mut greeting)?;
+        let greeting = deadline::read_line(&mut reader, budget)?;
         let greeting_value: Value = serde_json::from_str(&greeting)?;
         if greeting_value.get("QMP").is_none() {
             return Err(QmpError::Handshake(format!(
@@ -183,13 +236,14 @@ impl Qmp {
         // thread, because there's no point dispatching responses by id
         // until we know the connection is healthy.
         let mut writer_for_handshake = writer.try_clone()?;
-        send_line(
+        deadline::send(
             &mut writer_for_handshake,
             json!({ "execute": "qmp_capabilities" }),
+            budget,
         )?;
-        await_simple_return(&mut reader, "qmp_capabilities")?;
+        await_simple_return(&mut reader, "qmp_capabilities", budget)?;
 
-        send_line(
+        deadline::send(
             &mut writer_for_handshake,
             json!({
                 "execute": "migrate-set-capabilities",
@@ -200,11 +254,15 @@ impl Qmp {
                     }],
                 },
             }),
+            budget,
         )?;
-        await_simple_return(&mut reader, "migrate-set-capabilities")?;
+        await_simple_return(&mut reader, "migrate-set-capabilities", budget)?;
 
         // Now spawn the reader thread for async dispatch.
-        let inner = Arc::new(Inner::new(writer));
+        reader.get_ref().set_read_timeout(None)?;
+        writer.set_write_timeout(None)?;
+        let shutdown_stream = writer.try_clone()?;
+        let inner = Arc::new(Inner::new(writer, shutdown_stream));
         let reader_inner = Arc::clone(&inner);
         let reader_handle = thread::Builder::new()
             .name("qmp-reader".into())
@@ -224,7 +282,10 @@ impl Qmp {
         self.execute_timeout(cmd, args, DEFAULT_COMMAND_TIMEOUT)
     }
 
-    /// Send a command and block up to `timeout` for its reply.
+    /// Send a command and wait for its reply within one total `timeout`.
+    ///
+    /// The budget includes serialization, waiting for another sender, writing,
+    /// and receiving. A failed or partial send closes the connection.
     ///
     /// On timeout the pending entry is removed; a late reply from QEMU
     /// will be silently dropped by the reader.
@@ -234,6 +295,8 @@ impl Qmp {
         args: Value,
         timeout: Duration,
     ) -> Result<Value, QmpError> {
+        let budget = Budget::new(timeout)?;
+        budget.remaining()?;
         let id = self.allocate_id();
         let (tx, rx) = sync_channel::<RawResponse>(1);
 
@@ -255,21 +318,21 @@ impl Qmp {
         }
         request.insert("id".into(), Value::String(id.clone()));
 
-        // Hold the writer lock just long enough to send the line.
-        let write_result = {
-            let mut writer_guard = self.inner.writer.lock().unwrap();
-            match writer_guard.as_mut() {
-                Some(stream) => send_line(stream, Value::Object(request)),
-                None => Err(QmpError::Closed("write on closed connection")),
-            }
-        };
+        let write_result = self.inner.send(Value::Object(request), &budget);
 
         if let Err(e) = write_result {
             self.inner.pending.lock().unwrap().remove(&id);
             return Err(e);
         }
 
-        match rx.recv_timeout(timeout) {
+        let remaining = match budget.remaining() {
+            Ok(remaining) => remaining,
+            Err(error) => {
+                self.inner.pending.lock().unwrap().remove(&id);
+                return Err(error);
+            }
+        };
+        match rx.recv_timeout(remaining) {
             Ok(RawResponse::Return(v)) => Ok(v),
             Ok(RawResponse::Error { class, desc }) => Err(QmpError::Command {
                 command: cmd.to_owned(),
@@ -312,7 +375,7 @@ impl Qmp {
     where
         F: Fn(&Event) -> bool,
     {
-        let deadline = Instant::now() + timeout;
+        let budget = Budget::new(timeout)?;
         let mut log = self.inner.log.lock().unwrap();
         let mut next_event = since.0;
 
@@ -328,11 +391,7 @@ impl Qmp {
                 return Err(QmpError::Closed(log.close_reason));
             }
 
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(QmpError::Timeout(timeout));
-            }
-            let remaining = deadline - now;
+            let remaining = budget.remaining()?;
             let (new_log, wait_result) = self.inner.log_cond.wait_timeout(log, remaining).unwrap();
             log = new_log;
 
@@ -593,20 +652,15 @@ fn handle_line(line: &str, inner: &Inner) -> Option<&'static str> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn send_line<W: Write>(writer: &mut W, value: Value) -> Result<(), QmpError> {
-    let mut bytes = serde_json::to_vec(&value)?;
-    bytes.push(b'\n');
-    writer.write_all(&bytes)?;
-    writer.flush()?;
-    Ok(())
-}
-
 /// Synchronous "send command, block on next reply line, expect a
 /// `return` shape with no useful payload" helper used during the
 /// connection handshake.
-fn await_simple_return<R: BufRead>(reader: &mut R, command: &str) -> Result<(), QmpError> {
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
+fn await_simple_return(
+    reader: &mut BufReader<UnixStream>,
+    command: &str,
+    budget: &Budget,
+) -> Result<(), QmpError> {
+    let line = deadline::read_line(reader, budget)?;
     let v: Value = serde_json::from_str(&line)?;
     if v.get("return").is_some() {
         Ok(())

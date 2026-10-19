@@ -480,7 +480,10 @@ impl QemuVmm {
             let qmp = {
                 let deadline = Instant::now() + QMP_CONNECT_RETRY;
                 loop {
-                    match Qmp::connect(&qmp_socket) {
+                    match Qmp::connect_timeout(
+                        &qmp_socket,
+                        deadline.saturating_duration_since(Instant::now()),
+                    ) {
                         Ok(q) => break q,
                         Err(e) => {
                             if Instant::now() >= deadline {
@@ -1024,7 +1027,7 @@ fn format_unix_ns_iso8601(ns: i64) -> Option<String> {
     if ns < 0 {
         return None;
     }
-    let secs = (ns / 1_000_000_000) as i64;
+    let secs = ns / 1_000_000_000;
     // Convert epoch seconds → broken-down UTC time via libc gmtime_r.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let t = secs as libc::time_t;

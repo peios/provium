@@ -52,6 +52,7 @@
 #![warn(unreachable_pub)]
 
 mod connection;
+mod deadline;
 mod error;
 mod event;
 
