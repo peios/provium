@@ -1,0 +1,179 @@
+.TH PROVIUM 1 "" "Provium 0.1.0" "User Commands"
+.SH NAME
+provium \- Run Lua Tests against Virtual Machines
+.SH SYNOPSIS
+.B provium
+.RI [ options ]\ [ paths ...]\ [ command ]
+.SH DESCRIPTION
+Provium discovers files ending in .test.lua and runs each in its own Lua
+state. Tests within a file run sequentially. The dispatcher can run several
+files together, subject to their memory and CPU claims.
+.PP
+Positional paths select test discovery roots. Without paths, discovery
+starts in the current directory. The roots setting in provium.toml supplies
+helper and fixture search paths; it does not replace positional paths.
+.PP
+The qemu backend starts guests using the configured kernel and initrd.
+It needs QEMU, KVM, vsock, and the host network tools and access checked by
+preflight. The local backend runs agent operations on the host and does not
+qualify a guest kernel.
+.SH OPTIONS
+.TP
+.BR \-config " PATH"
+Read PATH instead of ./provium.toml.
+.TP
+.BR \-filter " TEXT"
+Select files whose discovered relative path contains TEXT.
+.TP
+.BR \-tag " TAG"
+Select tests with a matching tag. Repeated values are alternatives.
+.TP
+.BR \-no-tag " TAG"
+Exclude tests with a matching tag. Exclusions take precedence.
+.TP
+.BR \-tag-meta " KEY=VALUE"
+Select metadata values. Repeated values for one key are alternatives;
+different keys must all match.
+.TP
+.BR \-no-tag-meta " KEY=VALUE"
+Exclude matching metadata values, taking precedence over inclusion.
+.TP
+.B \-include-slow
+Include tests marked slow.
+.TP
+.B \-rerun-failed
+Restrict discovered files to the saved failure list.
+.TP
+.BR \-since " PATH"
+Select files modified after PATH.
+.TP
+.B \-watch
+Poll for changes every 500 milliseconds and repeat the run.
+.TP
+.B \-fail-fast
+Stop dispatch after the first failed file.
+.TP
+.BR \-timeout " DURATION"
+Set the per-file execution timeout. The default is 300 seconds. Accepts
+integer seconds or duration suffixes such as 500ms, 30s, 10m, and 2h.
+Zero turns the file timeout off. Queue time is not counted.
+.TP
+.BR \-mem " SIZE"
+Set the pool memory budget in bytes or with a suffix such as 512M or 2G.
+The default uses 80 percent of detected host memory.
+.TP
+.BR \-cpus " COUNT"
+Set the pool CPU budget. The default uses the detected online CPU count.
+.TP
+.BR \-cpu-overcommit " FACTOR"
+Multiply the CPU budget. The default is 1.0; the accepted value is clamped
+to the range 0.5 through 8.0.
+.TP
+.BR \-vmm " qemu|local"
+Select the backend. The default is qemu.
+.TP
+.B \-no-preflight
+Skip startup capability checks. This does not provide missing capabilities.
+.TP
+.B \-no-ksm
+Preserve host Kernel Same-page Merging settings instead of tuning them.
+.TP
+.B \-no-build
+Skip automatic dynamic-profile build hooks during execution.
+The prepare subcommand still runs builds.
+.TP
+.B \-json
+Write one JSON result per file. Conflicts with \-events-stdout.
+.TP
+.BR \-save-events " PATH"
+Save length-prefixed MessagePack events to PATH.
+.TP
+.B \-events-stdout
+Write MessagePack events to standard output and human results to standard
+error. Conflicts with \-json.
+.TP
+.BR \-events-socket " PATH"
+Serve the live event stream on a Unix socket.
+.TP
+.B \-coverage
+Run provium-coverage on the captured events after execution.
+The consumer must be available on PATH.
+.TP
+.BR \-verbose , " \-quiet"
+Show passing tests or restrict output to failures. These conflict.
+The short forms are \-v and \-q.
+.TP
+.B \-no-progress
+Suppress the interactive progress bar.
+.TP
+.BR \-help , " \-version"
+Print help or the version. The short forms are \-h and \-V.
+.SH COMMANDS
+Global options and discovery paths precede the subcommand.
+.TP
+.B list [\-\-fixtures]
+List discovered tests, or fixtures, without running them.
+.TP
+.B prepare [PROFILE]
+Run a profile's build command, or all declared builds in name order.
+Does not boot guests. A build failure stops preparation.
+.TP
+.B repl [PROFILE] [\-\-fixture NAME] [\-\-name NAME]
+Start an interactive Lua session using a profile or cached fixture.
+.TP
+.B console PROFILE
+Attach to a guest serial console. Options include \-mem SIZE, \-cpus COUNT,
+\-\-cmdline TEXT, \-agent, \-qemu PATH, and \-print-command.
+A double-hyphen separator introduces extra QEMU arguments.
+.TP
+.B fixture list
+List cached entries.
+.TP
+.B fixture build NAME
+Build a fixture if not already cached.
+.TP
+.B fixture rebuild NAME
+Remove that fixture's cached entry and build it again.
+.TP
+.B fixture clean
+Remove the fixture cache.
+.TP
+.B fixture stale
+List fixtures whose source identity has no matching cache entry.
+.TP
+.B lsp-setup [DIR] [\-\-force]
+Write Lua editor definitions and configuration. The default directory is
+the current directory. Existing editor configuration requires an explicit
+force option to overwrite.
+.SH ENVIRONMENT
+.TP
+.B PROVIUM_OVERLAY
+Path to the matching static guest agent overlay.
+.TP
+.B PROVIUM_RERUN_STATE
+Override the failure-list path, normally ~/.cache/provium/rerun.json.
+.SH FILES
+.TP
+.B provium.toml
+Profiles, fixture and helper roots, and cache settings.
+.TP
+.B ../share/provium/agent-overlay.cpio.gz
+Overlay path relative to the installed executable's directory.
+.TP
+.B ~/.cache/provium/fixtures
+Default fixture cache.
+.SH EXIT STATUS
+.TP
+.B 0
+All selected tests passed or were skipped.
+.TP
+.B 1
+At least one test file failed or timed out.
+.TP
+.B 2
+A configuration, preflight, or infrastructure error prevented the run.
+.SH SEE ALSO
+.BR provium-coverage (1)
+.PP
+The Provium technical reference in Peios Learn describes Lua interfaces,
+profile fields, wire versions, and resource ownership.

@@ -1,0 +1,32 @@
+.TH PROVIUM-COVERAGE 1 "" "Provium 0.1.0" "User Commands"
+.SH NAME
+provium-coverage \- Summarize Test Events by Metadata
+.SH SYNOPSIS
+.B provium-coverage
+.RI [ \-from\ PATH ]\ [ \-by\ KEY ]\ [ \-json ]
+.SH DESCRIPTION
+Read the length-prefixed MessagePack stream produced by Provium and group
+test outcomes by a metadata key. The default key is spec.
+This is test-metadata coverage, not compiler line or branch coverage.
+.SH OPTIONS
+.TP
+.BR \-from " PATH"
+Read PATH instead of standard input.
+.TP
+.BR \-by " KEY"
+Group outcomes by KEY instead of spec.
+.TP
+.B \-json
+Write JSON instead of the text summary.
+.TP
+.BR \-help , " \-version"
+Print help or the program version. Short forms are \-h and \-V.
+.SH EXAMPLES
+Save a run's events, then summarize them:
+.PP
+.nf
+provium tests/ \-save-events events.msgpack
+provium-coverage \-from events.msgpack \-by spec
+.fi
+.SH SEE ALSO
+.BR provium (1)
