@@ -154,12 +154,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("peios");
         // The command can rely on {out} already existing.
-        let p = profile(
-            Some("touch \"$PWD/marker\" && test -d ."),
+        let mut p = profile(
+            Some("test -d peios && touch peios/marker"),
             Some(out.clone()),
         );
+        p.dir = Some(dir.path().to_owned());
         run_build("peios", &p).expect("command succeeds");
-        assert!(out.exists(), "out_dir was created before the build ran");
+        assert!(
+            out.join("marker").is_file(),
+            "the command wrote into its output directory"
+        );
     }
 
     #[test]
