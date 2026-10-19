@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Host-side provium core. Scheduler, VM resource model, agent client, profile loading. Pre-Lua-bindings slice."
+description = "Provium host runner, scheduler, Lua bindings, VM resource model, and agent client."
 
 [lib]
 name = "provium_host"
@@ -18,7 +18,7 @@ required-features = ["lua", "local-agent"]
 
 [features]
 # Both on by default: the `provium` binary needs them, and so does every
-# published build (see ../pekit.toml), so a plain `cargo build --bin
+# published CLI build, so a plain `cargo build --bin
 # provium` must work. A consumer that wants only the agent client and
 # event types as a library builds with `--no-default-features`.
 default = ["lua", "local-agent"]

@@ -5,12 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn provium_bin() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let mut p = exe;
-    p.pop();
-    p.pop();
-    p.push("provium");
-    p
+    PathBuf::from(env!("CARGO_BIN_EXE_provium"))
 }
 
 fn write_file(dir: &std::path::Path, name: &str, body: &str) {

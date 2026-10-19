@@ -1,10 +1,8 @@
-# Rust build artifacts
-target/
-
-# Generated initrd / overlay images
+/target/
 /dist/
-
-# Editor / OS cruft
+/bazel-*
+**/__pycache__/
+*.pyc
 .DS_Store
 *.swp
 *~

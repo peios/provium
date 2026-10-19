@@ -1,0 +1,117 @@
+load("//build:agent.bzl", "agent_archive", "provium_runner", "static_agent")
+load("//packages:package.bzl", "package_store")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Cargo.toml",
+    "Cargo.lock",
+])
+
+alias(
+    name = "provium",
+    actual = "//provium-host:provium",
+)
+
+alias(
+    name = "provium-coverage",
+    actual = "//provium-coverage:provium-coverage",
+)
+
+filegroup(
+    name = "artifacts",
+    srcs = [
+        ":agent-initrd",
+        ":agent-overlay",
+        ":provium",
+        ":provium-coverage",
+    ],
+)
+
+static_agent(
+    name = "agent-static",
+    binary = "//provium-agent:provium-agent",
+)
+
+agent_archive(
+    name = "agent-overlay",
+    agent = ":agent-static",
+)
+
+agent_archive(
+    name = "agent-initrd",
+    agent = ":agent-static",
+    location = "init",
+)
+
+provium_runner(
+    name = "run",
+    binary = ":provium",
+    overlay = ":agent-overlay",
+)
+
+filegroup(
+    name = "package-data",
+    srcs = [
+        "Cargo.lock",
+        "Cargo.toml",
+        "LICENSE-APACHE",
+        "LICENSE-MIT",
+        "//build:agent-archive.py",
+        "//packages:definitions",
+    ] + glob(
+        [
+            "third-party/**",
+            "docs/man/*",
+        ],
+        allow_empty = True,
+    ) + ["//" + name + ":Cargo.toml" for name in [
+        "provium-host",
+        "provium-agent",
+        "provium-qmp",
+        "provium-protocol",
+        "provium-coverage",
+    ]],
+)
+
+filegroup(
+    name = "package-sources",
+    srcs = glob(
+        [
+            "*.toml",
+            "*.lock",
+            "*.md",
+            "LICENSE-*",
+            "MODULE.bazel*",
+            "BUILD.bazel",
+            "bazel",
+            ".bazel*",
+            ".gitignore",
+            ".github/**",
+            "docs/**",
+            "scripts/**",
+            "third-party/**",
+        ],
+        allow_empty = True,
+        exclude = [
+            "pekit.toml",
+            "docs/learn/dist/**",
+            "**/__pycache__/**",
+        ],
+    ) + ["//" + name + ":sources" for name in [
+        "provium-host",
+        "provium-agent",
+        "provium-qmp",
+        "provium-protocol",
+        "provium-coverage",
+        "tools",
+        "build",
+        "packages",
+        "vendor/ppk",
+    ]],
+)
+
+package_store(
+    name = "packages",
+    packages = ["//packages:all"],
+)

@@ -1,0 +1,25 @@
+{
+    "package": {
+        "name": "dev.peios.provium",
+        "version": "0.1.0-1",
+        "architecture": "x86_64",
+        "license_class": "free",
+        "homepage": "https://github.com/peios/provium",
+        "description": "VM test runner, coverage reporting, and static guest overlays"
+    },
+    "files": {
+        "source:LICENSE-MIT": "usr/share/licenses/dev.peios.provium/LICENSE-MIT",
+        "source:LICENSE-APACHE": "usr/share/licenses/dev.peios.provium/LICENSE-APACHE",
+        "stage:licenses/**": "usr/share/licenses/dev.peios.provium/third-party",
+        "stage:usr/bin/**": "usr/bin",
+        "stage:usr/share/provium/**": "usr/share/provium",
+        "stage:usr/share/man/**": "usr/share/man"
+    },
+    "executables": ["usr/bin/provium", "usr/bin/provium-coverage"],
+    "runtime_requirements": [
+        "GNU-compatible libc for development builds or Peios libc for native builds",
+        "qemu-system-x86_64 and KVM for real VM tests",
+        "qemu-img, ip, and tc for disk and network operations",
+        "nft for bridge rules; tcpdump for packet capture"
+    ]
+}

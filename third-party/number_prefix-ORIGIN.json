@@ -1,0 +1,8 @@
+{
+  "crate": "number_prefix",
+  "version": "0.4.0",
+  "revision": "eb6ebd215d50df1b199737f0356b988bebaedc84",
+  "source": "https://raw.githubusercontent.com/ogham/rust-number-prefix/eb6ebd215d50df1b199737f0356b988bebaedc84/LICENCE",
+  "sha256": "df8d11b64ecce43b1229cd72745c59513b54ba39f05e3ec7c06780617b7b1fcc",
+  "reason": "The published crate explicitly excludes LICENCE; recovered from its v0.4.0 release tag."
+}

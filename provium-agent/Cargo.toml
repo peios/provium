@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Guest-side agent for provium. Runs as PID 2 inside the test VM, listens on vsock, dispatches Layer-0 / Layer-1 ops on behalf of the host."
+description = "Guest-side agent for provium. Listens on vsock and performs guest operations, with optional PID 1 duties."
 
 [[bin]]
 name = "provium-agent"

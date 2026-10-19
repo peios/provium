@@ -1,0 +1,45 @@
+load("@crates//:crates.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Cargo.toml",
+    "BUILD.bazel",
+])
+
+filegroup(
+    name = "sources",
+    srcs = glob(
+        [
+            "src/**",
+            "tests/**",
+            "meta/**",
+        ],
+        allow_empty = True,
+    ) + [
+        "BUILD.bazel",
+        "Cargo.toml",
+    ],
+)
+
+rust_binary(
+    name = "provium-coverage",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["Cargo.toml"] + glob(
+        ["meta/**"],
+        allow_empty = True,
+    ),
+    crate_features = [],
+    crate_name = "provium_coverage",
+    crate_root = "src/main.rs",
+    edition = "2021",
+    version = "0.1.0",
+    deps = ["//provium-protocol:library"] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "binary-tests",
+    size = "medium",
+    crate = ":provium-coverage",
+)

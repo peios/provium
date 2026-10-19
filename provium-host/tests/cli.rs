@@ -9,7 +9,9 @@
 use std::path::Path;
 use std::process::Command;
 
-const PROVIUM_BIN: &str = env!("CARGO_BIN_EXE_provium");
+fn provium_bin() -> std::path::PathBuf {
+    std::fs::canonicalize(env!("CARGO_BIN_EXE_provium")).expect("declared Provium test binary")
+}
 
 fn write_file(dir: &Path, name: &str, contents: &str) {
     std::fs::write(dir.join(name), contents).unwrap();
@@ -29,7 +31,7 @@ cmdline = "console=hvc0"
 }
 
 fn run_provium(dir: &Path, extra_args: &[&str]) -> std::process::Output {
-    let mut cmd = Command::new(PROVIUM_BIN);
+    let mut cmd = Command::new(provium_bin());
     cmd.current_dir(dir)
         .arg("--vmm")
         .arg("local")
@@ -235,7 +237,7 @@ fn missing_config_surfaces_clean_error() {
         r#"test("t", function(t) t:assert(true) end)"#,
     );
     // Don't write provium.toml.
-    let mut cmd = Command::new(PROVIUM_BIN);
+    let mut cmd = Command::new(provium_bin());
     cmd.current_dir(dir.path())
         .arg("--vmm")
         .arg("local")
@@ -273,7 +275,7 @@ fn console_print_command_emits_interactive_qemu_line() {
     // QMP) is present.
     let dir = tempfile::tempdir().unwrap();
     write_console_config(dir.path());
-    let output = Command::new(PROVIUM_BIN)
+    let output = Command::new(provium_bin())
         .current_dir(dir.path())
         .arg("--no-preflight")
         .arg("--no-ksm")
@@ -304,7 +306,7 @@ fn console_print_command_emits_interactive_qemu_line() {
 fn console_unknown_profile_is_clean_error() {
     let dir = tempfile::tempdir().unwrap();
     write_console_config(dir.path());
-    let output = Command::new(PROVIUM_BIN)
+    let output = Command::new(provium_bin())
         .current_dir(dir.path())
         .arg("--no-preflight")
         .arg("--no-ksm")
@@ -330,7 +332,7 @@ fn console_with_agent_wires_vsock_in_print_command() {
     // only asserting on the vsock wiring when the run succeeded.
     let dir = tempfile::tempdir().unwrap();
     write_console_config(dir.path());
-    let output = Command::new(PROVIUM_BIN)
+    let output = Command::new(provium_bin())
         .current_dir(dir.path())
         .arg("--no-preflight")
         .arg("--no-ksm")

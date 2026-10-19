@@ -1,0 +1,14 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -55,7 +55,10 @@
+         let lib_dir = out_dir.join("lib");
+         let include_dir = out_dir.join("include");
+ 
+-        let source_dir_base = Path::new(env!("CARGO_MANIFEST_DIR"));
++        let source_manifest = env::var_os("PEIOS_LUA_SOURCE_MANIFEST")
++            .map(PathBuf::from)
++            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"));
++        let source_dir_base = source_manifest.parent().expect("Lua source directory");
+         let mut source_dir = match version {
+             Lua51 => source_dir_base.join("lua-5.1.5"),
+             Lua52 => source_dir_base.join("lua-5.2.4"),

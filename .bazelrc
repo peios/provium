@@ -1,0 +1,12 @@
+build --jobs=6
+build --compilation_mode=opt
+build --incompatible_strict_action_env
+build --action_env=PATH=/usr/bin:/bin
+test --test_output=errors
+build:peios --extra_toolchains=@peios_musl//:toolchain,@peios_rust//:toolchain
+build:peios --compilation_mode=opt
+build:peios --strip=never
+build:peios --define=peios_native=true
+build:peios --spawn_strategy=local
+build:peios --genrule_strategy=local
+build:peios --symlink_prefix=/

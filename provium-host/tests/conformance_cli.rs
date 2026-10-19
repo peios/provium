@@ -7,15 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn provium_bin() -> PathBuf {
-    // The cargo test binary lives at target/debug/deps/<test>;
-    // walk up to target/debug/provium.
-    let exe = std::env::current_exe().unwrap();
-    // exe = .../target/debug/deps/conformance_cli-XXXX
-    let mut p = exe;
-    p.pop(); // deps
-    p.pop(); // debug
-    p.push("provium");
-    p
+    PathBuf::from(env!("CARGO_BIN_EXE_provium"))
 }
 
 #[test]

@@ -1,0 +1,129 @@
+load("@crates//:crates.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Cargo.toml",
+    "BUILD.bazel",
+])
+
+filegroup(
+    name = "sources",
+    srcs = glob(
+        [
+            "src/**",
+            "tests/**",
+            "meta/**",
+            "examples/**",
+        ],
+        allow_empty = True,
+    ) + [
+        "BUILD.bazel",
+        "Cargo.toml",
+    ],
+)
+
+rust_library(
+    name = "library",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["Cargo.toml"] + glob(
+        ["meta/**"],
+        allow_empty = True,
+    ),
+    crate_features = [
+        "lua",
+        "local-agent",
+    ],
+    crate_name = "provium_host",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    version = "0.1.0",
+    deps = [
+        "//provium-agent:library",
+        "//provium-protocol:library",
+        "//provium-qmp:library",
+    ] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "unit-tests",
+    size = "medium",
+    crate = ":library",
+    deps = all_crate_deps(normal_dev = True),
+)
+
+rust_binary(
+    name = "provium",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["Cargo.toml"] + glob(
+        ["meta/**"],
+        allow_empty = True,
+    ),
+    crate_features = [
+        "lua",
+        "local-agent",
+    ],
+    crate_name = "provium",
+    crate_root = "src/bin/provium.rs",
+    edition = "2021",
+    version = "0.1.0",
+    deps = [":library"] + [
+        "//provium-agent:library",
+        "//provium-protocol:library",
+        "//provium-qmp:library",
+    ] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "binary-tests",
+    size = "medium",
+    crate = ":provium",
+)
+
+[
+    rust_test(
+        name = source.removeprefix("tests/").removesuffix(".rs"),
+        size = "medium",
+        srcs = [source] + glob(
+            ["tests/*/**/*.rs"],
+            allow_empty = True,
+        ),
+        crate_features = [
+            "lua",
+            "local-agent",
+        ],
+        crate_root = source,
+        data = [":provium"],
+        edition = "2021",
+        rustc_env = {
+            "CARGO_MANIFEST_DIR": "./provium-host",
+            "CARGO_BIN_EXE_provium": "$(rootpath :provium)",
+        },
+        tags = [
+            "manual",
+            "external",
+            "no-remote",
+        ] if source == "tests/kvm_lifecycle.rs" else [],
+        version = "0.1.0",
+        deps = [
+            ":library",
+            "//provium-agent:library",
+            "//provium-protocol:library",
+            "//provium-qmp:library",
+        ] + all_crate_deps(
+            normal = True,
+            normal_dev = True,
+        ),
+    )
+    for source in glob(["tests/*.rs"])
+]
+
+rust_binary(
+    name = "qemu-smoke",
+    srcs = ["examples/qemu_smoke.rs"],
+    edition = "2021",
+    tags = ["manual"],
+    version = "0.1.0",
+    deps = [":library"],
+)

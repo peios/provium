@@ -1,0 +1,8 @@
+{
+  "crate": "mlua-sys",
+  "version": "0.6.8",
+  "repository": "https://github.com/mlua-rs/mlua",
+  "revision": "31efd0cf727c3aee0b733a8dedac024589e1700c",
+  "notice_source": "mlua 0.10.5 Cargo archive from the same revision",
+  "sha256": "63b61a30d3e3abcfcb1bda4b99f4eea9fdb7d6ab05fbc513461fef6cf89baf29"
+}
