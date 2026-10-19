@@ -420,24 +420,47 @@ fn install_coverage_signal_handler() {
 /// the same connected-client list. Without this the socket would
 /// be removed + rebound every iteration, dropping connected
 /// dashboards on every re-run.
-static EVENTS_SOCKET_SINK: std::sync::OnceLock<
-    std::sync::Mutex<
-        std::collections::HashMap<PathBuf, provium_host::scheduler::events::UnixSocketSink>,
-    >,
-> = std::sync::OnceLock::new();
+type EventsSocketCache = std::sync::Mutex<
+    std::collections::HashMap<PathBuf, provium_host::scheduler::events::UnixSocketSink>,
+>;
+
+static EVENTS_SOCKET_SINK: std::sync::OnceLock<EventsSocketCache> = std::sync::OnceLock::new();
 
 fn events_socket_sink(
     path: &std::path::Path,
 ) -> std::io::Result<provium_host::scheduler::events::UnixSocketSink> {
-    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let map =
-        EVENTS_SOCKET_SINK.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut g = map.lock().unwrap();
-    if let Some(existing) = g.get(&canon) {
+    let cache = EVENTS_SOCKET_SINK.get_or_init(EventsSocketCache::default);
+    cached_events_socket_sink(path, cache)
+}
+
+fn cached_events_socket_sink(
+    path: &std::path::Path,
+    cache: &EventsSocketCache,
+) -> std::io::Result<provium_host::scheduler::events::UnixSocketSink> {
+    let absolute = std::path::absolute(path)?;
+    let parent = absolute.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "event socket needs a filename",
+        )
+    })?;
+    let name = absolute.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "event socket needs a filename",
+        )
+    })?;
+    std::fs::create_dir_all(parent)?;
+    // Resolve the parent, which exists before binding, rather than the socket
+    // itself. Relative paths and directory aliases then keep the same cache key
+    // before and after the first listener creates the socket.
+    let canonical = std::fs::canonicalize(parent)?.join(name);
+    let mut cached = cache.lock().unwrap();
+    if let Some(existing) = cached.get(&canonical) {
         return Ok(existing.clone());
     }
-    let sink = provium_host::scheduler::events::UnixSocketSink::bind(path)?;
-    g.insert(canon, sink.clone());
+    let sink = provium_host::scheduler::events::UnixSocketSink::bind(&canonical)?;
+    cached.insert(canonical, sink.clone());
     Ok(sink)
 }
 
@@ -2097,4 +2120,56 @@ fn parse_size(s: &str) -> Result<u64, String> {
     // zero-pool-budget bug in detected_pool_memory_bytes.
     n.checked_mul(multiplier)
         .ok_or_else(|| format!("size `{s}` overflows u64"))
+}
+
+#[cfg(test)]
+mod event_socket_tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    fn socket_directory() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("provium-cache-")
+            .tempdir_in("/tmp")
+            .unwrap()
+    }
+
+    #[test]
+    fn relative_path_reuses_listener_before_and_after_socket_creation() {
+        let directory = socket_directory();
+        let absolute = directory.path().join("events.sock");
+        let cwd = std::env::current_dir().unwrap();
+        let mut relative = PathBuf::new();
+        for _ in cwd.components().skip(1) {
+            relative.push("..");
+        }
+        relative.push(absolute.strip_prefix("/").unwrap());
+        let cache = EventsSocketCache::default();
+        let first = cached_events_socket_sink(&relative, &cache).unwrap();
+        let inode = std::fs::symlink_metadata(&absolute).unwrap().ino();
+        let second = cached_events_socket_sink(&relative, &cache).unwrap();
+        assert_eq!(cache.lock().unwrap().len(), 1);
+        assert_eq!(std::fs::symlink_metadata(&absolute).unwrap().ino(), inode);
+        drop((first, second));
+        assert!(absolute.exists(), "the watch cache still owns the listener");
+        drop(cache);
+        assert!(!absolute.exists(), "releasing the cache stops the listener");
+    }
+
+    #[test]
+    fn directory_alias_and_created_parent_share_one_listener() {
+        let directory = socket_directory();
+        let parent = directory.path().join("created");
+        let alias = directory.path().join("alias");
+        let absolute = parent.join("events.sock");
+        let cache = EventsSocketCache::default();
+        let first = cached_events_socket_sink(&absolute, &cache).unwrap();
+        let inode = std::fs::symlink_metadata(&absolute).unwrap().ino();
+        std::os::unix::fs::symlink(&parent, &alias).unwrap();
+        let second = cached_events_socket_sink(&alias.join("events.sock"), &cache).unwrap();
+        assert_eq!(cache.lock().unwrap().len(), 1);
+        assert_eq!(std::fs::symlink_metadata(&absolute).unwrap().ino(), inode);
+        drop((first, second, cache));
+        assert!(!absolute.exists());
+    }
 }

@@ -65,7 +65,14 @@ socat - UNIX-CONNECT:/tmp/provium.sock | provium-coverage
 
 The binary listens, accepts connections, and fans out frames. Useful for live
 dashboards. The socket persists across `--watch` iterations so connected
-clients aren't dropped on every re-run.
+clients aren't dropped on every re-run. Relative paths and aliases of the
+parent directory identify the same listener throughout the run.
+
+Rust callers can clone `UnixSocketSink` to share a listener. Dropping its
+last owner stops the listener, closes its client connections, and removes
+its socket path if that path still names the same socket. The CLI retains
+its cached listeners for the process lifetime; normal watch iterations do
+not release them.
 
 ## Coverage post-run
 
