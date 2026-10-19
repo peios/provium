@@ -3,7 +3,7 @@
 Provium follows Panorama's PSC common rules and Rust, Python, shell, and
 Bazel profiles. Use four spaces and a 100-column formatter target. Prose
 uses US English and wraps at 78 columns. The canonical rules are in
-`../panorama/docs/psc.product` relative to the repository.
+`../learn/psc.product` relative to the repository.
 
 `tools/check` runs the pinned mechanical checks, Bazel tests, and strict
 Clippy. `tools/check-docs.py` checks published documentation. Manual review
