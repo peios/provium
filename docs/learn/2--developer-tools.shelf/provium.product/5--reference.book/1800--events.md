@@ -123,7 +123,7 @@ The test was filtered or marked Skipped (declarative `meta.skip`, inline
 | `name`            | string    | Test name.                                                  |
 | `duration_ns`     | u64       | Wall-clock up to failure.                                   |
 | `reason`          | string    | Assertion message, exception text, or panic payload.        |
-| `console_excerpt` | string    | Last 4 KiB from each booted VM's console log. May be empty. |
+| `console_excerpt` | string    | Last 4 KiB from each booted VM's console log. Can be empty. |
 | `meta`            | `MetaMap` | Per-test metadata.                                          |
 
 ## VM lifecycle

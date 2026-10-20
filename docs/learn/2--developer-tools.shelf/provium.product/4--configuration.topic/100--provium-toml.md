@@ -118,7 +118,7 @@ Path validation (does the file actually exist?) happens at VM-boot time, not
 config-load time. This lets a single `provium.toml` be portable across
 machines that have different kernel layouts.
 
-May be omitted when [`root`](#root) names a composed Peios root, in which case
+Can be omitted when [`root`](#root) names a composed Peios root, in which case
 the kernel is found inside it.
 
 ### `root`
@@ -316,7 +316,7 @@ cmdline = "console=ttyS0 quiet"
 
 | Type   | Required                          | Description                                                                                                                                                                                                                                                               |
 | ------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| string | one of `cmdline` / `cmdline_file` | Inline kernel command line. May be empty or omitted **when `cmdline_file` is set**, the two compose. A profile with neither a non-empty `cmdline` nor a `cmdline_file` is rejected with `profile \`<name>\` has empty cmdline and no \`cmdline_file\`; set at least one`. |
+| string | one of `cmdline` / `cmdline_file` | Inline kernel command line. It can be empty or omitted **when `cmdline_file` is set**, the two compose. A profile with neither a non-empty `cmdline` nor a `cmdline_file` is rejected with `profile \`<name>\` has empty cmdline and no \`cmdline_file\`; set at least one`. |
 
 `vm:boot({kernel_cmdline = "..."})` overrides the whole command line for one
 boot; `vm:boot({kernel_cmdline_append = "..."})` keeps it and adds tokens
