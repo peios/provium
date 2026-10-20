@@ -1,5 +1,6 @@
 title = "Provium"
 monogram = "Pv"
-color = "#ec4899"
+icon = "provium.svg"
+color = "#e11d48"
 
 description = "A KVM-backed test harness — tests written in Lua, run inside real virtual machines against a real kernel."
