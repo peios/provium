@@ -9,217 +9,217 @@
         {
             "source": "learn-staging/provium.product/1--getting-started.topic/100--what-is-provium.md",
             "source_sha256": "3e6722e9acb24155cc1d238c97308706f8f40ef36ffab1151a33f1cede272ad8",
-            "destination": "docs/learn/provium.product/1--getting-started.topic/100--what-is-provium.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/1--getting-started.topic/100--what-is-provium.md"
         },
         {
             "source": "learn-staging/provium.product/1--getting-started.topic/200--quick-start.md",
             "source_sha256": "7207bccc3aa4b1c3c56f980f97506547dee5405405d23682d59a9adf697a1c5a",
-            "destination": "docs/learn/provium.product/1--getting-started.topic/200--quick-start.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/1--getting-started.topic/200--quick-start.md"
         },
         {
             "source": "learn-staging/provium.product/1--getting-started.topic/300--project-structure.md",
             "source_sha256": "29df1d6ef3182b12b2a43e708ebd38df6f2a5e22fe1b7aa77f5aaf35ebc6a270",
-            "destination": "docs/learn/provium.product/1--getting-started.topic/300--project-structure.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/1--getting-started.topic/300--project-structure.md"
         },
         {
             "source": "learn-staging/provium.product/1--getting-started.topic/trail.toml",
             "source_sha256": "bbef5c9abe7bf7280682b820632283fcb1efffff066f0c430da018ad5e9bcb7e",
-            "destination": "docs/learn/provium.product/1--getting-started.topic/trail.toml"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/1--getting-started.topic/trail.toml"
         },
         {
             "source": "learn-staging/provium.product/2--writing-tests.topic/100--the-test-function.md",
             "source_sha256": "2336496f5c21f10835bdecd5f9fb8817936ebc26c95840e76e8da529ef7ce3b5",
-            "destination": "docs/learn/provium.product/2--writing-tests.topic/100--the-test-function.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/2--writing-tests.topic/100--the-test-function.md"
         },
         {
             "source": "learn-staging/provium.product/2--writing-tests.topic/200--vms-and-profiles.md",
             "source_sha256": "f8bbdad3f56930ca7cb4aad4cee0e7411d7be8fb50ac7033017b97df6312a239",
-            "destination": "docs/learn/provium.product/2--writing-tests.topic/200--vms-and-profiles.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/2--writing-tests.topic/200--vms-and-profiles.md"
         },
         {
             "source": "learn-staging/provium.product/2--writing-tests.topic/300--running-commands.md",
             "source_sha256": "e1b84bd8ce6d9e937909f6560ae8985a24d1e6af5dd05b62e858c4a5eee113c0",
-            "destination": "docs/learn/provium.product/2--writing-tests.topic/300--running-commands.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/2--writing-tests.topic/300--running-commands.md"
         },
         {
             "source": "learn-staging/provium.product/2--writing-tests.topic/400--files-and-handles.md",
             "source_sha256": "a22a292b1e45df13243bce2583fc2841ac368f25166a35e0d922d2d01bddab35",
-            "destination": "docs/learn/provium.product/2--writing-tests.topic/400--files-and-handles.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/2--writing-tests.topic/400--files-and-handles.md"
         },
         {
             "source": "learn-staging/provium.product/2--writing-tests.topic/500--disks-and-fault-injection.md",
             "source_sha256": "0a9533ed2ad9c2de713eddcc14720dc9255f0b77098f1b8e49c5b4024847fe2e",
-            "destination": "docs/learn/provium.product/2--writing-tests.topic/500--disks-and-fault-injection.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/2--writing-tests.topic/500--disks-and-fault-injection.md"
         },
         {
             "source": "learn-staging/provium.product/2--writing-tests.topic/600--bridges-and-impairments.md",
             "source_sha256": "381a6d75033453557f217fdcc7daa74594bcce653d4c6233cb101b40bde06b42",
-            "destination": "docs/learn/provium.product/2--writing-tests.topic/600--bridges-and-impairments.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/2--writing-tests.topic/600--bridges-and-impairments.md"
         },
         {
             "source": "learn-staging/provium.product/2--writing-tests.topic/700--streams-and-tails.md",
             "source_sha256": "98bac276ad40ba39497ab243c3445cdba6d507ee747b202958cb5000607f8a87",
-            "destination": "docs/learn/provium.product/2--writing-tests.topic/700--streams-and-tails.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/2--writing-tests.topic/700--streams-and-tails.md"
         },
         {
             "source": "learn-staging/provium.product/2--writing-tests.topic/800--labs-and-scope.md",
             "source_sha256": "83f177ed8edc0e498555a66f6d3e1b6d9ef46612a82f2955354cb1c72b63111b",
-            "destination": "docs/learn/provium.product/2--writing-tests.topic/800--labs-and-scope.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/2--writing-tests.topic/800--labs-and-scope.md"
         },
         {
             "source": "learn-staging/provium.product/2--writing-tests.topic/trail.toml",
             "source_sha256": "a5959e84c9e4b615c6c95cc53535501fe09183850fd06f373c827b6b6f0afc39",
-            "destination": "docs/learn/provium.product/2--writing-tests.topic/trail.toml"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/2--writing-tests.topic/trail.toml"
         },
         {
             "source": "learn-staging/provium.product/3--running-tests.topic/100--the-cli.md",
             "source_sha256": "898ec16bbf0104f07757af395e33663f8c4563de66fc84e0e697e752715bbbb2",
-            "destination": "docs/learn/provium.product/3--running-tests.topic/100--the-cli.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/3--running-tests.topic/100--the-cli.md"
         },
         {
             "source": "learn-staging/provium.product/3--running-tests.topic/200--events-and-coverage.md",
             "source_sha256": "7e3f7f6b38b843df691449c73eedaf867d2e2650d924f4be8a7c3ee0ad811c77",
-            "destination": "docs/learn/provium.product/3--running-tests.topic/200--events-and-coverage.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/3--running-tests.topic/200--events-and-coverage.md"
         },
         {
             "source": "learn-staging/provium.product/3--running-tests.topic/300--fixtures-and-dependencies.md",
             "source_sha256": "22bc4e1b543f3dcbca07345b489498b61af5454303b3129ef44d5751c7e80a05",
-            "destination": "docs/learn/provium.product/3--running-tests.topic/300--fixtures-and-dependencies.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/3--running-tests.topic/300--fixtures-and-dependencies.md"
         },
         {
             "source": "learn-staging/provium.product/3--running-tests.topic/400--pools-and-parallelism.md",
             "source_sha256": "80fbf110c29f2ae9dcdaadc82fc54e743f636e9d2b95dc98ad0bdeee796ee8a7",
-            "destination": "docs/learn/provium.product/3--running-tests.topic/400--pools-and-parallelism.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/3--running-tests.topic/400--pools-and-parallelism.md"
         },
         {
             "source": "learn-staging/provium.product/3--running-tests.topic/trail.toml",
             "source_sha256": "e0a6847e6d1a1a00eb8958284813c9c62bd950f3759b1806f297678fd2766928",
-            "destination": "docs/learn/provium.product/3--running-tests.topic/trail.toml"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/3--running-tests.topic/trail.toml"
         },
         {
             "source": "learn-staging/provium.product/4--configuration.topic/100--provium-toml.md",
             "source_sha256": "16269c688f07efd2143968b9ecc5c54499133483655cf503af2652c0477bbd7c",
-            "destination": "docs/learn/provium.product/4--configuration.topic/100--provium-toml.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/4--configuration.topic/100--provium-toml.md"
         },
         {
             "source": "learn-staging/provium.product/4--configuration.topic/200--profiles.md",
             "source_sha256": "bbbc8be708d4f1c9c1724807c9f7c3295989ce35f4d427dd795fcecb3756a0f6",
-            "destination": "docs/learn/provium.product/4--configuration.topic/200--profiles.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/4--configuration.topic/200--profiles.md"
         },
         {
             "source": "learn-staging/provium.product/4--configuration.topic/300--dynamic-profiles.md",
             "source_sha256": "3705c889b2de3f3f0d26ed6a515f161649f5aa3a60d6c6c83c2ee2e91ae3a800",
-            "destination": "docs/learn/provium.product/4--configuration.topic/300--dynamic-profiles.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/4--configuration.topic/300--dynamic-profiles.md"
         },
         {
             "source": "learn-staging/provium.product/4--configuration.topic/trail.toml",
             "source_sha256": "056fbee9e358a8b300fdebd6e15e8996084c142b15380236544ed511a6c02e62",
-            "destination": "docs/learn/provium.product/4--configuration.topic/trail.toml"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/4--configuration.topic/trail.toml"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/100--provium-module.md",
             "source_sha256": "235e2379f0d9b97af615bd5cfebc88299be3836b42964b542361fb04eaa96778",
-            "destination": "docs/learn/provium.product/5--reference.book/100--provium-module.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/100--provium-module.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/1000--worker.md",
             "source_sha256": "277c655ae1a50e765dc58c0d2a8f0c0f4ea107e944b7f46edc89f3716ec1551b",
-            "destination": "docs/learn/provium.product/5--reference.book/1000--worker.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/1000--worker.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/1100--streams.md",
             "source_sha256": "cbb00822bb3c3e78d15ff7d358d61278becb37f17d8816e6dd1bebb5a88e2dd2",
-            "destination": "docs/learn/provium.product/5--reference.book/1100--streams.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/1100--streams.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/1200--console.md",
             "source_sha256": "7a7725a2f9985316a29aafb2201f876a69c5e58297b03e092c84a70d541be04e",
-            "destination": "docs/learn/provium.product/5--reference.book/1200--console.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/1200--console.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/1300--clock.md",
             "source_sha256": "a06d0e0a104361c839f0709ebb8318cbf65ff714792014c927b19f00a6f3b193",
-            "destination": "docs/learn/provium.product/5--reference.book/1300--clock.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/1300--clock.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/1400--snapshot.md",
             "source_sha256": "677533885793d415293ddccafbfe435bb184fd601153f80952527a7675d27a4e",
-            "destination": "docs/learn/provium.product/5--reference.book/1400--snapshot.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/1400--snapshot.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/1500--test-framework.md",
             "source_sha256": "8b39ff830f35ff25214721f5798dd3058c7452832b93977b0e0f7d9b2f2f9b40",
-            "destination": "docs/learn/provium.product/5--reference.book/1500--test-framework.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/1500--test-framework.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/1600--meta-tags.md",
             "source_sha256": "e24f51f0abf33d0a585cd107ce167cae541f00d031819a793643156abd0b5c20",
-            "destination": "docs/learn/provium.product/5--reference.book/1600--meta-tags.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/1600--meta-tags.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/1700--cli.md",
             "source_sha256": "55c0fbaf8bd00dc577fe545287d57539633af4cc5f85845d21b8a971743c052c",
-            "destination": "docs/learn/provium.product/5--reference.book/1700--cli.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/1700--cli.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/1800--events.md",
             "source_sha256": "b26599105681c19d09b73033db71203872c48229ff580c83279d3e91d99a38b4",
-            "destination": "docs/learn/provium.product/5--reference.book/1800--events.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/1800--events.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/1900--protocol-version.md",
             "source_sha256": "a96fe9f5d279417074c9d8398b9285d567133f96f197f41a3cfce219a38c4160",
-            "destination": "docs/learn/provium.product/5--reference.book/1900--protocol-version.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/1900--protocol-version.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/200--json.md",
             "source_sha256": "0fcaf14a1dde0122b8e9e489277087cb68e280ec95f1ee95ec21e16032625755",
-            "destination": "docs/learn/provium.product/5--reference.book/200--json.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/200--json.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/300--vm.md",
             "source_sha256": "a5b9c224b7b968ef38b3c874df3c1c8ded4365282bdba886ee8f324d89972b89",
-            "destination": "docs/learn/provium.product/5--reference.book/300--vm.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/300--vm.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/400--bridge.md",
             "source_sha256": "1300dec4b4a5f4f95278011dbc6eba49b393143da9f8345bdf81c8fee334f147",
-            "destination": "docs/learn/provium.product/5--reference.book/400--bridge.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/400--bridge.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/500--lab.md",
             "source_sha256": "43113bd7ac754797b6fe1a668ab0936245205d1a220d60add65d7ed7abd6e080",
-            "destination": "docs/learn/provium.product/5--reference.book/500--lab.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/500--lab.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/600--disk.md",
             "source_sha256": "98b7ab168562a25dd62eb4a15e48a886a463b5b1718cf0b9a5bcff517b496a3b",
-            "destination": "docs/learn/provium.product/5--reference.book/600--disk.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/600--disk.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/700--nic.md",
             "source_sha256": "3d3f5f7bdf3f0e53d58b455911d5bd75cf96e0f77bfd501fc7c609877542d7b3",
-            "destination": "docs/learn/provium.product/5--reference.book/700--nic.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/700--nic.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/800--file-handle.md",
             "source_sha256": "61202e0776a0fe9b1adf6d7d45453e5e70a54f01eb3a05bc4737d29f09ce11f5",
-            "destination": "docs/learn/provium.product/5--reference.book/800--file-handle.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/800--file-handle.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/900--process.md",
             "source_sha256": "59873979fee61936fb9618cca1c84e2b2e2231470a70e5c70def005c11b786e0",
-            "destination": "docs/learn/provium.product/5--reference.book/900--process.md"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/900--process.md"
         },
         {
             "source": "learn-staging/provium.product/5--reference.topic/trail.toml",
             "source_sha256": "ea6d39902d46cdb7008ba2d373e97f1f96297fda0734262472674a1fe09b870e",
-            "destination": "docs/learn/provium.product/5--reference.book/trail.toml"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/5--reference.book/trail.toml"
         },
         {
             "source": "learn-staging/provium.product/trail.toml",
             "source_sha256": "5fb699f2155876748572cd0b89433d0d417cdd6f1a55aeae4a9389f3fa9b67cc",
-            "destination": "docs/learn/provium.product/trail.toml"
+            "destination": "docs/learn/2--developer-tools.shelf/provium.product/trail.toml"
         }
     ]
 }

@@ -21,7 +21,7 @@ QEMU, KVM, guest images, and the host access described in the documentation.
 
 - [Building and checking](docs/building.md)
 - [Coding conventions](docs/coding-style.md)
-- [Learn source](docs/learn/provium.product)
+- [Learn source](docs/learn/2--developer-tools.shelf/provium.product)
 - [Command manuals](docs/man)
 
 `./bazel build //:packages` creates development PPK blobs and manifests.
