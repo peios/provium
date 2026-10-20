@@ -60,7 +60,7 @@ The child is forked and exec'd _by the worker_, so it starts life with the
 worker's credentials: whatever token the worker installed, whatever privileges
 it adjusted, is what the new program runs under. That is what makes exec-time
 behavior testable from a principal the test minted, a token surviving or being
-relabelled at exec, a descriptor without `FD_CLOEXEC` crossing into the new
+relabeled at exec, a descriptor without `FD_CLOEXEC` crossing into the new
 image, a child's identity after its parent impersonated. `proc:pid()` gives
 the child's pid for the main agent to inspect from outside.
 
