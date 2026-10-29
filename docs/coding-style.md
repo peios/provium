@@ -1,12 +1,12 @@
 # Coding Conventions
 
-Provium follows Panorama's PSC common rules and Rust, Python, shell, and
-Bazel profiles. Use four spaces and a 100-column formatter target. Prose
+Provium follows Panorama's PSC common rules and Rust, Python, and shell
+profiles. Use four spaces and a 100-column formatter target. Prose
 uses US English and wraps at 78 columns. The canonical rules are in
 `../learn/4--standards-and-conventions.shelf/psc.product` relative to the repository.
 
-`tools/check` runs the pinned mechanical checks, Bazel tests, and strict
-Clippy. `tools/check-docs.py` checks published documentation. Manual review
+`tools/check` runs the pinned mechanical checks, then `pekit test`, which
+includes strict Clippy. `tools/check-docs.py` checks published documentation. Manual review
 also covers names, units, resource ownership, error handling, and whether
 long functions have more than one responsibility.
 

@@ -1,20 +1,15 @@
 #!/bin/bash
-# Compatibility entry point; Bazel owns compilation and archive construction.
+# Compatibility entry point; pekit owns compilation and archive construction.
 set -euo pipefail
 kind=${1:?archive target required}
 shift
 workspace=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-profile=opt
 output=""
 usage() {
-    echo "usage: build-$kind.sh [--debug] [-o <path>]"
+    echo "usage: build-$kind.sh [-o <path>]"
 }
 while (($#)); do
     case "$1" in
-    --debug)
-        profile=dbg
-        shift
-        ;;
     -o)
         if (($# < 2)); then
             usage >&2
@@ -35,11 +30,11 @@ while (($#)); do
 done
 case "$kind" in
 overlay)
-    target=agent-overlay
+    target=agent_overlay
     default=agent-overlay.cpio.gz
     ;;
 initrd)
-    target=agent-initrd
+    target=agent_initrd
     default=initrd.cpio.gz
     ;;
 *)
@@ -50,8 +45,8 @@ esac
 output=${output:-$workspace/dist/$default}
 case "$output" in /*) ;; *) output="$PWD/$output" ;; esac
 cd "$workspace"
-./bazel build -c "$profile" "//:$target"
-artifact=$(./bazel cquery -c "$profile" "//:$target" --output=files)
+# pekit prints each output's path, indented, under the target it built.
+artifact=$(pekit build "$target" | sed -n 's/^  //p')
 mkdir -p -- "$(dirname -- "$output")"
 cp -- "$artifact" "$output"
 printf '%s\n' "$output"

@@ -1,115 +1,117 @@
 # Building and Checking Provium
 
-The supported development host is x86-64 Linux. Bazel owns the build graph,
-tests, guest archives, and PPK packaging. Cargo remains available for Rust
-editor support and Clippy; CI checks both against the committed lockfile.
+Use pekit to build Provium's host programs, its guest agent and the agent's
+archives, and to run their tests. Pekit builds each crate on its own, so a
+change rebuilds only the crates it reaches. The supported development host
+is x86-64 Linux.
 
-## Development prerequisites
+## Before you start
 
-Provide Python 3.11 or later, a C toolchain, binutils, cpio, gzip, curl, and a JDK
-supported by Bazel 8.4.2. The wrapper downloads and verifies the pinned
-Bazel binary. Bazel downloads the pinned Rust 1.98.1 toolchains and locked
-crate dependencies. Lua is compiled from its declared vendored sources.
+You need pekit and Git. Everything else is pinned and fetched by pekit on
+the first build: the Bootlin C toolchains, Rust 1.98.1 with Clippy and the
+musl standard library, Python 3.14, busybox, and the crates `Cargo.lock`
+selects. Lua is compiled from the sources vendored in its crate. The first
+build needs network access; later builds find what they need in pekit's
+store, and every step runs without network access in a sandbox that holds
+only its declared inputs.
 
-The style check also needs Rust 1.98.1 with rustfmt and Clippy, Node.js, and
-the tools pinned by `tools/style-tools.lock.json`. Prepare those tools
-outside the source tree:
+The build files use the gcslib libraries named in `workspace.gcsl` and the
+build files. `pekit lock` pins their commits in `pekit.lock`.
+
+## Build
 
 ```sh
-python3 tools/prepare-style-tools.py /tmp/provium-style
-export PEIOS_STYLE_BIN=/tmp/provium-style/bin
+pekit build provium provium_coverage agent agent_overlay agent_initrd
 ```
 
-## Build and test
+| Target | Output |
+|---|---|
+| `provium` | The host command, which runs Lua tests against virtual machines |
+| `provium_coverage` | The coverage report tool, which consumes Provium's events |
+| `agent` | The guest agent, a static, position-independent musl program |
+| `agent_overlay` | A deterministic newc archive with the agent at `sbin/provium-agent` |
+| `agent_initrd` | A deterministic newc archive with the agent as `init` |
+
+Pekit prints where each output is, under `pekit-out/<target>/`. The host
+programs are built for glibc. The agent is built for musl, linked with full
+RELRO and immediate binding, and has no ELF interpreter, so it never
+depends on the host's dynamic loader. `build/agent-archive.py` writes the
+archives with zero timestamps and root ownership.
+
+Run a configured test project with the built command, and name the
+matching overlay in `PROVIUM_OVERLAY`:
 
 ```sh
-./bazel build //:artifacts
-./bazel test //...
+scripts/build-overlay.sh
+provium=$(pekit build provium | sed -n 's/^  //p')
+PROVIUM_OVERLAY="$PWD/dist/agent-overlay.cpio.gz" \
+    "$provium" --config /path/to/provium.toml /path/to/tests
+```
+
+Pekit prints each output's path indented under its target. The compatibility
+scripts `scripts/build-overlay.sh` and `scripts/build-initrd.sh` build an
+archive with pekit and copy it to `dist/`, or to the path given with `-o`.
+
+## Test
+
+```sh
+pekit test
+```
+
+| Test | Check |
+|---|---|
+| `protocol`, `qmp`, `agent`, `host`, `coverage` | Each member's unit tests, its programs' tests, and its integration tests |
+| `doctests` | Each library's documentation tests |
+| `agent_archive` | The archive writer's output is reproducible and extracts as newc, with busybox's `cpio` |
+| `clippy` | Clippy's checks of every target of every member, with every warning denied |
+
+Integration tests that run a program are told where it is, as Cargo tells
+them in `CARGO_BIN_EXE_<name>`, and pekit places the program there when
+they run. The normal tests use disposable files and mock services. The
+`kvm_lifecycle` tests boot a real virtual machine with KVM, so pekit builds
+them and does not run them. Ignored or environment-skipped tests do not
+count as guest qualification. Do not start `provium-agent` as process 1 or
+point a local-backend test at important host files as part of ordinary
+validation.
+
+A test whose inputs did not change is found in the store and not run
+again.
+
+For the full contributor check, install the pinned PSC tools into a
+directory outside the repository, then run the shared entry point:
+
+```sh
+python3 tools/prepare-style-tools.py "$HOME/.cache/provium-style"
+export PEIOS_STYLE_BIN="$HOME/.cache/provium-style/bin"
 tools/check
 ```
 
-`//:provium` builds the host runner, `//:provium-coverage` builds the event
-consumer, and `//:agent-static` builds the musl-linked static guest agent.
-`//:agent-overlay` places the agent at `sbin/provium-agent` in a deterministic
-cpio archive. `//:agent-initrd` places it at `init`. These guest targets
-select their own toolchain; changing the host build does not accidentally
-make the guest agent depend on the host's dynamic loader.
+`tools/check` checks owned source formatting and lint with rustfmt, Ruff,
+ShellCheck, shfmt, and Prettier, then runs `pekit test`. The style checks
+use the host's Rust 1.98.1 formatter through rustup. The tool versions and
+hashes are recorded in `tools/style-tools.lock.json`. GitHub's workflow
+runs the style checks alone; builds and tests run with pekit.
 
-`//:artifacts` includes both host binaries and both archives. Find their
-paths with `./bazel cquery TARGET --output=files`. Run the CLI through the
-launcher to select the matching overlay automatically:
+## How the build is planned
 
-```sh
-./bazel run //:run -- --config /path/to/provium.toml /path/to/tests
-```
+`build.gcsl` plans the Cargo workspace with the gcslib rust library's
+`workspace`, once for glibc and once for musl: Cargo works out each
+member's build, unit by unit, and pekit compiles each unit as a step.
+Planning reads the manifests, `Cargo.lock`, and which files exist, never
+the sources, so editing a source plans nothing again. Keep Rust dependency
+versions in the Cargo manifests and `Cargo.lock`, and update the lockfile
+deliberately with Cargo.
 
-The launcher preserves the caller's working directory. The compatibility
-scripts `scripts/build-overlay.sh` and `scripts/build-initrd.sh` call Bazel
-and copy an archive to `dist/` or the path supplied with `-o`.
+## Not built with pekit yet
 
-The normal tests use disposable files and mock services. KVM lifecycle
-tests are manual targets. Ignored or environment-skipped tests do not count
-as guest qualification. Do not start `provium-agent` as PID 1 or point a
-local-backend test at important host files as part of ordinary validation.
-
-## Build packages
-
-```sh
-./bazel build //:packages
-```
-
-`bazel-bin/packages.store` contains content-addressed blobs and manifests
-for four development packages:
-
-- `dev.peios.provium`: host commands, guest archives, manuals, and notices.
-- `dev.peios.provium-debuginfo`: matching split debug data.
-- `dev.peios.provium-debugsource`: declared source inputs for debugging.
-- `dev.peios.provium-source`: the repository source needed to rebuild.
-
-The development version is `0.1.0-1`. Packaging validates ELF layout,
-checks matching debug identities, collects notices from the declared
-crate closure, and verifies blob hashes. The source package includes the
-Bazel and Cargo manifests and lockfiles. It still needs the pinned tools
-and external inputs; it is not an offline dependency bundle.
-
-The default host build targets GNU/Linux. It is not a native Peios release.
-Package provenance records the userspace ABI and qualification limits.
-Native packages also remain unsigned development artifacts until the
-separate release and guest gates are met.
-
-## Native Peios toolchains
-
-`--config=peios` selects the installed Peios Rust compiler and GNU and musl
-standard libraries. Set `PEIOS_RUSTC` if the compiler is not `/usr/bin/rustc`.
-The compiler must be at least version 1.98.1 and supply the Peios hardening
-support. Run this configuration inside the intended Peios userspace with
-its C toolchain and libraries.
-
-Acquire dependencies in a connected development environment:
-
-```sh
-tools/offline-build acquire /absolute/path/provium-inputs
-```
-
-Then place the same source tree and inputs in an isolated native build
-environment and use a fresh writable work directory:
-
-```sh
-tools/offline-build build /absolute/path/provium-inputs /absolute/path/work
-tools/offline-build test /absolute/path/provium-inputs /absolute/path/work
-```
-
-The offline consumer refuses a different module lock and disables
-repository downloads. Record the source revision or tree hash, toolchain
-identity, input snapshot, logs, and output hashes for qualification.
-Native package checks require host CET properties and packed relocations.
-The static musl guest has documented startup and relocation exceptions in
-its build record; do not infer runtime shadow-stack activation from ELF
-properties.
+Packages, debug information, and builds with the native Peios toolchain,
+which hardens programs with control-flow enforcement technology (CET), are
+not yet built with pekit. The package definitions, their validation, and
+the native build settings from the Bazel build are kept outside this
+repository until they are. Pekit does not build Cargo examples, so the
+real-QEMU smoke run builds its runner with Cargo.
 
 ## Documentation and VM checks
-
-Use the pinned Trail revision from `.github/workflows/check.yml`:
 
 ```sh
 TRAIL=/path/to/trail python3 tools/check-docs.py

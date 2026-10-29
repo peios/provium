@@ -1,0 +1,95 @@
+# provium's tests: each member's unit tests, its programs' tests and its
+# integration tests, as `cargo test -p` builds them, each library's
+# documentation tests, as `cargo test --doc` runs them, the agent
+# archive's test, and Clippy's checks, as `cargo clippy --all-targets --
+# -Dwarnings` makes them.
+#
+# `kvm_lifecycle` boots a real virtual machine with KVM, so it is built and
+# not run here; see `docs/building.md`.
+#
+# A test's own code runs in a hermetic step of its own, so what it plans,
+# builds or fetches is in its parameters' defaults.
+import fs
+import toolchain
+import Toolchain from toolchain
+import BuildEnv from "github.com/gcslib/buildenv"
+import "github.com/gcslib/python"
+import "github.com/gcslib/rust"
+
+# The members of the workspace, each a directory of the same name.
+let MEMBERS = ["provium-protocol", "provium-qmp", "provium-agent", "provium-host", "provium-coverage"]
+
+# Runs each of `tests` but the KVM test, given the programs the
+# integration tests run.
+fn ran(tests: List<rust.RustTest>, given: List<{at: String, place: Dir | File}>) -> {} {
+    let each = for test in tests if test.name != "kvm_lifecycle" {
+        = rust.run_test(test, given = given)
+    }
+}
+
+# busybox's tools, at `/bin` and `/usr/bin`.
+fn tools(env: BuildEnv) -> List<{at: String, place: Dir | File}> {
+    = [{at = "/bin"; place = env.root.dir("bin")}, {at = "/usr/bin"; place = env.root.dir("bin")}]
+}
+
+def test protocol(tests: List<rust.RustTest> = rust.tests(crates(), "provium-protocol")) {
+    = ran(tests, [])
+}
+
+def test qmp(tests: List<rust.RustTest> = rust.tests(crates(), "provium-qmp")) {
+    = ran(tests, [])
+}
+
+# The agent's and the host's tests run commands, so they are given
+# busybox's `/bin/sh` and tools, at `/bin` and at `/usr/bin`, where one
+# test links `printf` from, besides the programs their integration tests
+# run.
+def test agent(
+    tests: List<rust.RustTest> = rust.tests(crates(), "provium-agent"),
+    given: List<{at: String, place: Dir | File}> = bins_given(),
+    env: BuildEnv = toolchain.get(Toolchain::BuildEnv),
+) {
+    = ran(tests, [...tools(env), ...given])
+}
+
+def test host(
+    tests: List<rust.RustTest> = rust.tests(crates(), "provium-host"),
+    given: List<{at: String, place: Dir | File}> = bins_given(),
+    env: BuildEnv = toolchain.get(Toolchain::BuildEnv),
+) {
+    = ran(tests, [...tools(env), ...given])
+}
+
+def test coverage(tests: List<rust.RustTest> = rust.tests(crates(), "provium-coverage")) {
+    = ran(tests, [])
+}
+
+# Each member's documentation tests.
+def test doctests(ran: List<List<{}>> = for each in MEMBERS { = rust.doctests(crates(), each) }) {}
+
+# Clippy's checks of each member, every warning denied.
+def test clippy(checked: List<List<{}>> = for each in MEMBERS { = rust.clippy(crates(), each, flags = ["-Dwarnings"]) }) {}
+
+# The agent archive writer: its archives are reproducible and extract with
+# the newc format's layout, as `build/test_agent_archive.py` checks.
+def test agent_archive(
+    sources: List<{at: String, place: Dir | File}> = [
+        {at = "/work/build/agent-archive.py"; place = file("build/agent-archive.py")},
+        {at = "/work/build/test_agent_archive.py"; place = file("build/test_agent_archive.py")},
+    ],
+    c: toolchain.CToolchain = toolchain.get(Toolchain::C),
+    py: python.PythonToolchain = toolchain.get(Toolchain::Python),
+    env: BuildEnv = toolchain.get(Toolchain::BuildEnv),
+) {
+    let home = working_dir().path
+    let made = fs.mkdir("{home}/tmp")
+    let placed: List<{at: String, place: Dir | File | FileSet}> = [
+        {at = "/"; place = c.runtime},
+        {at = "/tmp"; place = dir("{home}/tmp")},
+        {at = "/bin"; place = env.root.dir("bin")},
+        {at = "/opt/python"; place = py.root},
+        ...(for each in sources { = {at = each.at; place = each.place} }),
+    ]
+    let box = fs.compose(placed).sandbox(cwd = "/work", env = {PATH = "/bin"; PYTHONDONTWRITEBYTECODE = "1"})
+    let ran = box.exec("/opt/python/bin/python3", "/work/build/test_agent_archive.py")
+}
