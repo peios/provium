@@ -34,13 +34,10 @@ class ArchiveTests(unittest.TestCase):
                     output = root / location.replace("/", "-")
                     output.mkdir()
                     subprocess.run(
-                        [
-                            "cpio",
-                            "--extract",
-                            "--make-directories",
-                            "--quiet",
-                            "--no-absolute-filenames",
-                        ],
+                        # The short options are POSIX cpio's, which GNU's and
+                        # busybox's both take. Every name in the archive is
+                        # relative, so extraction stays under `output`.
+                        ["cpio", "-i", "-d"],
                         input=gzip.decompress(first.read_bytes()),
                         cwd=output,
                         check=True,

@@ -1,0 +1,103 @@
+# provium's programs, each crate compiled on its own (see the rust
+# library's `workspace`): the host programs for glibc, and the guest agent,
+# a static, position-independent musl program that a guest runs without a
+# C library, with its two archives.
+import fs
+import toolchain
+import Toolchain from toolchain
+import "github.com/gcslib/python"
+import "github.com/gcslib/rust"
+
+# Where an integration test finds the program it runs: Cargo tells its
+# compile `CARGO_BIN_EXE_<name>`, and `bins_given` places the program
+# there when it runs.
+let BINS = "/opt/provium/bin"
+
+# lua-src's crate, by its name and the version `Cargo.lock` pins.
+let LUA_SRC = "lua-src-547.0.0"
+
+# The provium workspace, planned for `target`. Each integration test is
+# told where its package's program is, as Cargo tells it.
+def crates(target: String = "x86_64-unknown-linux-gnu", rustflags: List<String> = []) -> rust.RustWorkspace {
+    let vendor = rust.vendored(file("Cargo.lock"))
+    = rust.workspace(
+        dir("."),
+        vendor,
+        target = target,
+        rustflags = rustflags,
+        crates = [
+            # mlua-sys's build script compiles Lua from the sources in
+            # lua-src's crate, which lua-src finds beside its own manifest,
+            # so the script is given that crate where its sandbox has the
+            # vendored crates.
+            {package = "mlua-sys"; given = [{at = "/work/vendor/{LUA_SRC}"; place = vendor.crates.dir(LUA_SRC)}]},
+            {package = "provium-host"; env = [{key = "CARGO_BIN_EXE_provium"; value = "{BINS}/provium"}]},
+            {package = "provium-agent"; env = [{key = "CARGO_BIN_EXE_provium-agent"; value = "{BINS}/provium-agent"}]},
+        ],
+    )
+}
+
+# The workspace for the guest agent: static musl programs, linked with full
+# RELRO.
+def agent_crates() -> rust.RustWorkspace {
+    let target = "x86_64-unknown-linux-musl"
+    = crates(target = target, rustflags = [...rust.default_rustflags(target), "-Clink-arg=-Wl,-z,relro", "-Clink-arg=-Wl,-z,now"])
+}
+
+# The host command, which runs Lua test files against virtual machines.
+def build provium() {
+    = rust.bin(crates(), "provium-host", name = "provium")
+}
+
+# The coverage report tool.
+def build provium_coverage() {
+    = rust.bin(crates(), "provium-coverage")
+}
+
+# The guest agent, static, for musl.
+def build agent() {
+    = rust.bin(agent_crates(), "provium-agent")
+}
+
+# The agent at `sbin/provium-agent` in a newc archive, an overlay on a
+# guest's own initramfs.
+def build agent_overlay() {
+    = archived(build agent(), "sbin/provium-agent", file("build/agent-archive.py"))
+}
+
+# The agent as `init` in a newc archive, a guest's whole initramfs.
+def build agent_initrd() {
+    = archived(build agent(), "init", file("build/agent-archive.py"))
+}
+
+# The program of each integration test of a package, placed where its
+# compile was told it is: the host programs, for glibc.
+def bins_given() -> List<{at: String, place: Dir | File}> {
+    = [
+        {at = "{BINS}/provium"; place = build provium()},
+        {at = "{BINS}/provium-agent"; place = rust.bin(crates(), "provium-agent")},
+    ]
+}
+
+# `agent`, at `location` in a deterministic gzipped newc archive, as
+# `tool`, `build/agent-archive.py`, writes it.
+#[hermetic]
+fn archived(
+    agent: File,
+    location: String,
+    tool: File,
+    c: toolchain.CToolchain = toolchain.get(Toolchain::C),
+    py: python.PythonToolchain = toolchain.get(Toolchain::Python),
+) -> File {
+    let placed: List<{at: String, place: Dir | File | FileSet}> = [
+        {at = "/"; place = c.runtime},
+        {at = "/opt/python"; place = py.root},
+        {at = "/work/agent"; place = agent},
+        {at = "/work/agent-archive.py"; place = tool},
+    ]
+    let box = fs.compose(placed).sandbox(cwd = "/work", env = {PYTHONDONTWRITEBYTECODE = "1"})
+    let ran = box.exec("/opt/python/bin/python3", "/work/agent-archive.py", "/work/agent", "/work/agent.cpio.gz", location)
+    let made = working_dir().file("agent.cpio.gz")
+    fs.copy(box.file("/work/agent.cpio.gz").path, made.path)
+    = made
+}

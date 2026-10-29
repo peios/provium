@@ -10,6 +10,8 @@ command -v qemu-system-x86_64 >/dev/null
 kernel=$(realpath -- "$KERNEL")
 workspace=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$workspace"
-./bazel build //:agent-initrd //provium-host:qemu-smoke
-initrd=$(./bazel cquery //:agent-initrd --output=files)
-exec ./bazel run //provium-host:qemu-smoke -- --kernel "$kernel" --initrd "$workspace/$initrd"
+# pekit prints each output's path, indented, under the target it built.
+initrd=$(pekit build agent_initrd | sed -n 's/^  //p')
+# pekit does not build Cargo examples, so Cargo builds the smoke runner.
+exec cargo +1.98.1 run --locked --release -p provium-host --example qemu_smoke -- \
+    --kernel "$kernel" --initrd "$workspace/$initrd"

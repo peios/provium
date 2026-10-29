@@ -1,5 +1,7 @@
-name: Provium checks
+name: Provium style
 
+# Checks owned source style only. Builds and tests run with pekit on the
+# build server and with `tools/check` locally, not here.
 on:
     pull_request:
     push:
@@ -13,38 +15,21 @@ concurrency:
     cancel-in-progress: true
 
 jobs:
-    check:
+    style:
         runs-on: ubuntu-24.04
-        timeout-minutes: 60
+        timeout-minutes: 10
         steps:
             - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
               with:
                   persist-credentials: false
-            - name: Install development tools
-              run: |
-                  sudo apt-get update
-                  sudo apt-get install -y build-essential libclang-dev pkg-config python3-venv binutils groff cpio
-                  rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+            - name: Install the Rust formatter
+              run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt
             - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
               with:
                   node-version: "22.22.1"
-            - name: Prepare PSC tools
+            - name: Prepare pinned PSC style tools
               run: python3 tools/prepare-style-tools.py "$RUNNER_TEMP/provium-style"
-            - name: Check GNU build, tests and PSC
+            - name: Check style
               env:
                   PEIOS_STYLE_BIN: ${{ runner.temp }}/provium-style/bin
-                  CARGO_TARGET_DIR: ${{ runner.temp }}/provium-cargo
-                  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-              run: tools/check
-            - name: Build host and static guest packages
-              run: ./bazel build //:packages
-            - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-              with:
-                  repository: peios/trail
-                  ref: 1d662e98cbcbdd5c51c01533afcab7f5723a2eff
-                  path: .ci-trail
-                  persist-credentials: false
-            - name: Check documentation
-              run: |
-                  (cd .ci-trail && tools/bazel build //:trail)
-                  TRAIL="$PWD/.ci-trail/bazel-bin/trail" python3 tools/check-docs.py
+              run: python3 tools/style-check.py

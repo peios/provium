@@ -1,8 +1,11 @@
 #!/bin/sh
-# Check unprivileged behavior; guest and privileged qualification is explicit.
+# The contributor check: owned source style, then pekit's tests, which build
+# every member, run their unit and integration tests and the agent archive's
+# test, and check them with Clippy. Guest and privileged qualification is
+# explicit; see docs/building.md.
 set -eu
+
 repo=$(CDPATH="" cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo"
 python3 tools/style-check.py
-./bazel test //...
-cargo +1.98.1 clippy --workspace --all-targets --locked --no-deps -- -D warnings
+pekit test

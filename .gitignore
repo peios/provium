@@ -1,8 +1,13 @@
 /target/
 /dist/
-/bazel-*
 **/__pycache__/
 *.pyc
 .DS_Store
 *.swp
 *~
+
+# pekit build output.
+/pekit-out/
+
+# Libraries pekit fetches for the pins in `pekit.lock`.
+/.gcsl/
