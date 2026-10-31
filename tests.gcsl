@@ -19,8 +19,7 @@ import "github.com/gcslib/rust"
 # The members of the workspace, each a directory of the same name.
 let MEMBERS = ["provium-protocol", "provium-qmp", "provium-agent", "provium-host", "provium-coverage"]
 
-# Runs each of `tests` but the KVM test, given the programs the
-# integration tests run.
+# Runs each of `tests` but the KVM test, given `given`.
 fn ran(tests: List<rust.RustTest>, given: List<{at: String, place: Dir | File}>) -> {} {
     let each = for test in tests if test.name != "kvm_lifecycle" {
         = rust.run_test(test, given = given)
@@ -42,22 +41,19 @@ def test qmp(tests: List<rust.RustTest> = rust.tests(crates(), "provium-qmp")) {
 
 # The agent's and the host's tests run commands, so they are given
 # busybox's `/bin/sh` and tools, at `/bin` and at `/usr/bin`, where one
-# test links `printf` from, besides the programs their integration tests
-# run.
+# test links `printf` from.
 def test agent(
     tests: List<rust.RustTest> = rust.tests(crates(), "provium-agent"),
-    given: List<{at: String, place: Dir | File}> = bins_given(),
     env: BuildEnv = toolchain.get(Toolchain::BuildEnv),
 ) {
-    = ran(tests, [...tools(env), ...given])
+    = ran(tests, tools(env))
 }
 
 def test host(
     tests: List<rust.RustTest> = rust.tests(crates(), "provium-host"),
-    given: List<{at: String, place: Dir | File}> = bins_given(),
     env: BuildEnv = toolchain.get(Toolchain::BuildEnv),
 ) {
-    = ran(tests, [...tools(env), ...given])
+    = ran(tests, tools(env))
 }
 
 def test coverage(tests: List<rust.RustTest> = rust.tests(crates(), "provium-coverage")) {

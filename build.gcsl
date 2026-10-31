@@ -8,16 +8,10 @@ import Toolchain from toolchain
 import "github.com/gcslib/python"
 import "github.com/gcslib/rust"
 
-# Where an integration test finds the program it runs: Cargo tells its
-# compile `CARGO_BIN_EXE_<name>`, and `bins_given` places the program
-# there when it runs.
-let BINS = "/opt/provium/bin"
-
 # lua-src's crate, by its name and the version `Cargo.lock` pins.
 let LUA_SRC = "lua-src-547.0.0"
 
-# The provium workspace, planned for `target`. Each integration test is
-# told where its package's program is, as Cargo tells it.
+# The provium workspace, planned for `target`.
 def crates(target: String = "x86_64-unknown-linux-gnu", rustflags: List<String> = []) -> rust.RustWorkspace {
     let vendor = rust.vendored(file("Cargo.lock"))
     = rust.workspace(
@@ -31,8 +25,6 @@ def crates(target: String = "x86_64-unknown-linux-gnu", rustflags: List<String> 
             # so the script is given that crate where its sandbox has the
             # vendored crates.
             {package = "mlua-sys"; given = [{at = "/work/vendor/{LUA_SRC}"; place = vendor.crates.dir(LUA_SRC)}]},
-            {package = "provium-host"; env = [{key = "CARGO_BIN_EXE_provium"; value = "{BINS}/provium"}]},
-            {package = "provium-agent"; env = [{key = "CARGO_BIN_EXE_provium-agent"; value = "{BINS}/provium-agent"}]},
         ],
     )
 }
@@ -59,6 +51,11 @@ def build agent() {
     = rust.bin(agent_crates(), "provium-agent")
 }
 
+# The real-QEMU smoke runner, which `scripts/smoke-real-qemu.sh` runs.
+def build qemu_smoke() {
+    = rust.example(crates(), "provium-host", "qemu_smoke")
+}
+
 # The agent at `sbin/provium-agent` in a newc archive, an overlay on a
 # guest's own initramfs.
 def build agent_overlay() {
@@ -68,15 +65,6 @@ def build agent_overlay() {
 # The agent as `init` in a newc archive, a guest's whole initramfs.
 def build agent_initrd() {
     = archived(build agent(), "init", file("build/agent-archive.py"))
-}
-
-# The program of each integration test of a package, placed where its
-# compile was told it is: the host programs, for glibc.
-def bins_given() -> List<{at: String, place: Dir | File}> {
-    = [
-        {at = "{BINS}/provium"; place = build provium()},
-        {at = "{BINS}/provium-agent"; place = rust.bin(crates(), "provium-agent")},
-    ]
 }
 
 # `agent`, at `location` in a deterministic gzipped newc archive, as
