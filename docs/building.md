@@ -65,9 +65,9 @@ pekit test
 | `agent_archive` | The archive writer's output is reproducible and extracts as newc, with busybox's `cpio` |
 | `clippy` | Clippy's checks of every target of every member, with every warning denied |
 
-Integration tests that run a program are told where it is, as Cargo tells
-them in `CARGO_BIN_EXE_<name>`, and pekit places the program there when
-they run. The normal tests use disposable files and mock services. The
+Integration tests that run a program find it through
+`CARGO_BIN_EXE_<name>`, as under Cargo. Each test runs from its package's
+directory. The normal tests use disposable files and mock services. The
 `kvm_lifecycle` tests boot a real virtual machine with KVM, so pekit builds
 them and does not run them. Ignored or environment-skipped tests do not
 count as guest qualification. Do not start `provium-agent` as process 1 or
@@ -108,8 +108,7 @@ Packages, debug information, and builds with the native Peios toolchain,
 which hardens programs with control-flow enforcement technology (CET), are
 not yet built with pekit. The package definitions, their validation, and
 the native build settings from the Bazel build are kept outside this
-repository until they are. Pekit does not build Cargo examples, so the
-real-QEMU smoke run builds its runner with Cargo.
+repository until they are.
 
 ## Documentation and VM checks
 

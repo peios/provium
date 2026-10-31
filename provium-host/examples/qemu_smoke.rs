@@ -10,9 +10,8 @@
 //! ## Usage
 //!
 //! ```text
-//! ./bazel run //provium-host:qemu-smoke -- \
-//!     --kernel <path/to/bzImage> \
-//!     --initrd <path/to/initrd.cpio.gz>
+//! pekit build qemu_smoke
+//! KERNEL=<path/to/bzImage> scripts/smoke-real-qemu.sh
 //! ```
 
 use std::collections::BTreeMap;

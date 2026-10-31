@@ -12,6 +12,5 @@ workspace=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$workspace"
 # pekit prints each output's path, indented, under the target it built.
 initrd=$(pekit build agent_initrd | sed -n 's/^  //p')
-# pekit does not build Cargo examples, so Cargo builds the smoke runner.
-exec cargo +1.98.1 run --locked --release -p provium-host --example qemu_smoke -- \
-    --kernel "$kernel" --initrd "$workspace/$initrd"
+runner=$(pekit build qemu_smoke | sed -n 's/^  //p')
+exec "$workspace/$runner" --kernel "$kernel" --initrd "$workspace/$initrd"
